@@ -33,6 +33,7 @@
 
 # Visual Studio cache directory
 .vs/
+.vscode
 
 # Gradle cache directory
 .gradle/
@@ -97,3 +98,48 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Task files
+tasks.json
+tasks/
+# Logs
+logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev-debug.log
+
+# Dependency directories
+node_modules/
+# Environment variables
+.env
+# Editor directories and files
+.idea
+*.ntvs*
+*.njsproj
+*.sw?
+
+
+
+# cursor related files and directories
+.cursor
+.cursorignore
+
+# Claude related files and directories
+.ai-rules/
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.claude-code/
+.claude-cache/
+*.claude-backup
+.claude.json
+.claude-config/
+claude-artifacts/
+
+# SuperClaude related
+SuperClaude/
+superclaude/
+*superclaude*
+*SuperClaude*
+AGENTS.md
