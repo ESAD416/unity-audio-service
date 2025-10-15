@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace Controller
+namespace Controller.Audio
 {
     /// <summary>
     /// 提供 ContextMenu 便於在編輯器測試 AudioController 的播放功能。
@@ -13,6 +13,14 @@ namespace Controller
         [SerializeField] private AudioClip sfxLoopClip;
         [SerializeField] private AudioClip voiceClip;
         [SerializeField] private AudioClip voiceLoopClip;
+
+        [Header("Test Keys")]
+        [SerializeField] private string bgmKey;
+        [SerializeField] private string sfxKey;
+        [SerializeField] private bool sfxKeyLoop;
+        [SerializeField] private string voiceKey;
+        [SerializeField] private bool voiceKeyLoop;
+        [SerializeField] private bool keyAllowAsyncLoad = true;
 
         [Header("Test Volumes")]
         [Range(0f, 1f)] [SerializeField] private float masterVolume = 1f;
@@ -38,6 +46,17 @@ namespace Controller
             if (!TryGetController(out var controller)) return;
             controller.PlayBgm(bgmClip);
         }
+        [ContextMenu("Audio/Play/BGM (Key)")]
+        private void ContextPlayBgmByKey()
+        {
+            if (!TryGetController(out var controller)) return;
+            if (string.IsNullOrEmpty(bgmKey))
+            {
+                Debug.LogWarning("[AudioControllerDebugMenu] BGM key is empty");
+                return;
+            }
+            controller.PlayBgm(bgmKey, keyAllowAsyncLoad);
+        }
         [ContextMenu("Audio/Play/SFX (One Shot)")]
         private void ContextPlaySfx()
         {
@@ -50,6 +69,17 @@ namespace Controller
             if (!TryGetController(out var controller)) return;
             controller.PlaySfx(sfxLoopClip, true);
         }
+        [ContextMenu("Audio/Play/SFX (Key)")]
+        private void ContextPlaySfxByKey()
+        {
+            if (!TryGetController(out var controller)) return;
+            if (string.IsNullOrEmpty(sfxKey))
+            {
+                Debug.LogWarning("[AudioControllerDebugMenu] SFX key is empty");
+                return;
+            }
+            controller.PlaySfx(sfxKey, sfxKeyLoop, keyAllowAsyncLoad);
+        }
         [ContextMenu("Audio/Play/Voice")]
         private void ContextPlayVoice()
         {
@@ -61,6 +91,17 @@ namespace Controller
         {
             if (!TryGetController(out var controller)) return;
             controller.PlayVoice(voiceLoopClip, true);
+        }
+        [ContextMenu("Audio/Play/Voice (Key)")]
+        private void ContextPlayVoiceByKey()
+        {
+            if (!TryGetController(out var controller)) return;
+            if (string.IsNullOrEmpty(voiceKey))
+            {
+                Debug.LogWarning("[AudioControllerDebugMenu] Voice key is empty");
+                return;
+            }
+            controller.PlayVoice(voiceKey, voiceKeyLoop, keyAllowAsyncLoad);
         }
 
         [ContextMenu("Audio/Stop/BGM")]

@@ -1,8 +1,9 @@
 using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.Audio;
 
-namespace Controller
+namespace Controller.Audio
 {
     public class AudioController : MonoBehaviour
     {
@@ -11,6 +12,8 @@ namespace Controller
 
         [Header("AudioMixer")]
         [SerializeField] private AudioMixer mixer; // Assigned via Inspector when available
+        [Header("Clip Provider")]
+        [SerializeField] private MonoBehaviour clipProviderSource; // Should implement IAudioClipProvider
         private const string MIXER_DEFAULT_RESOURCE_PATH = "Audio/MasterMixer";
         private const string PARAM_MASTER = "masterVolume";
         private const string PARAM_BGM = "bgmVolume";
@@ -30,11 +33,24 @@ namespace Controller
         // Dedicated looping Voice source (like Sound_Loop)
         private AudioSource _voiceLoopSource;
 
-        public AudioSource BgmSource => _bgmSource;
-        public AudioSource SfxSource => _sfxSource;
-        public AudioSource SfxLoopSource => _sfxLoopSource;
-        public AudioSource VoiceSource => _voiceSource;
-        public AudioSource VoiceLoopSource => _voiceLoopSource;
+        private static IAudioClipProvider _globalClipProvider;
+        private IAudioClipProvider _clipProvider;
+        public IAudioClipProvider ClipProvider => _clipProvider;
+
+        public static void RegisterClipProvider(IAudioClipProvider provider)
+        {
+            _globalClipProvider = provider;
+            if (Instance != null)
+            {
+                Instance.SetClipProvider(provider);
+            }
+        }
+
+        public void SetClipProvider(IAudioClipProvider provider)
+        {
+            _clipProvider = provider;
+        }
+
 
         private void Awake()
         {
@@ -50,6 +66,7 @@ namespace Controller
             DontDestroyOnLoad(gameObject);
             if (VerboseLogging) Debug.Log("[AudioController] Instance established");
 
+            ResolveClipProvider();
             Initialize();
         }
 
@@ -63,6 +80,31 @@ namespace Controller
             EnsureAudioSources();
 
             if (VerboseLogging) Debug.Log("[AudioController] Initialize completed");
+        }
+
+        private void ResolveClipProvider()
+        {
+            if (clipProviderSource != null)
+            {
+                if (clipProviderSource is IAudioClipProvider providerFromBehaviour)
+                {
+                    _clipProvider = providerFromBehaviour;
+                }
+                else
+                {
+                    Debug.LogWarning("[AudioController] Clip provider source does not implement IAudioClipProvider");
+                }
+            }
+
+            if (_clipProvider == null && _globalClipProvider != null)
+            {
+                _clipProvider = _globalClipProvider;
+            }
+
+            if (_clipProvider == null && VerboseLogging)
+            {
+                Debug.Log("[AudioController] No clip provider assigned; key-based clip loading unavailable");
+            }
         }
 
         private void LoadAudioMixer()
@@ -284,6 +326,79 @@ namespace Controller
                 _voiceSource.Play();
 
                 if (VerboseLogging) Debug.Log($"[AudioController] Playing voice clip: {clip.name}");
+            }
+        }
+
+        #endregion
+
+        #region Play Audio By Key
+
+        public void PlayBgm(string key, bool allowAsyncLoad = true)
+        {
+            PlayByKey(AudioCategory.Bgm, key, PlayBgm, allowAsyncLoad);
+        }
+
+        public void PlaySfx(string key, bool loop = false, bool allowAsyncLoad = true)
+        {
+            PlayByKey(AudioCategory.Sfx, key, clip => PlaySfx(clip, loop), allowAsyncLoad);
+        }
+
+        public void PlayVoice(string key, bool loop = false, bool allowAsyncLoad = true)
+        {
+            PlayByKey(AudioCategory.Voice, key, clip => PlayVoice(clip, loop), allowAsyncLoad);
+        }
+
+        private void PlayByKey(AudioCategory category, string key, Action<AudioClip> playAction, bool allowAsyncLoad)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                Debug.LogWarning($"[AudioController] Play {category} called with empty key");
+                return;
+            }
+
+            if (_clipProvider == null)
+            {
+                Debug.LogWarning($"[AudioController] No clip provider set, cannot play {category} with key {key}");
+                return;
+            }
+
+            if (_clipProvider.TryGetClip(category, key, out var clip) && clip != null)
+            {
+                playAction?.Invoke(clip);
+                return;
+            }
+
+            if (!allowAsyncLoad)
+            {
+                Debug.LogWarning($"[AudioController] Clip for key {key} not available synchronously");
+                return;
+            }
+
+            if (_clipProvider is IAsyncAudioClipProvider asyncProvider)
+            {
+                StartCoroutine(LoadAndPlayAsync(asyncProvider, category, key, playAction));
+                return;
+            }
+
+            Debug.LogWarning($"[AudioController] Clip provider does not support async loading for key {key}");
+        }
+
+        private IEnumerator LoadAndPlayAsync(IAsyncAudioClipProvider asyncProvider, AudioCategory category, string key, Action<AudioClip> playAction)
+        {
+            yield return asyncProvider.LoadClipAsync(category, key);
+
+            if (_clipProvider == null)
+            {
+                yield break;
+            }
+
+            if (_clipProvider.TryGetClip(category, key, out var clip) && clip != null)
+            {
+                playAction?.Invoke(clip);
+            }
+            else
+            {
+                Debug.LogWarning($"[AudioController] Failed to load clip asynchronously for key {key}");
             }
         }
 

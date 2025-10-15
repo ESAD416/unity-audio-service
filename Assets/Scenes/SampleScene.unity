@@ -340,6 +340,52 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &914633392
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 914633393}
+  - component: {fileID: 914633394}
+  m_Layer: 0
+  m_Name: AudioClipProvider
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &914633393
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 914633392}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1475876493}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &914633394
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 914633392}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a599e4e0a988d2a4c89a64a4c52c46c1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Controller.Audio.FallbackAudioClipProvider
+  mainProvider: {fileID: 0}
+  backupProvider: {fileID: 0}
 --- !u!1 &1475876491
 GameObject:
   m_ObjectHideFlags: 0
@@ -352,7 +398,7 @@ GameObject:
   - component: {fileID: 1475876494}
   - component: {fileID: 1475876495}
   m_Layer: 0
-  m_Name: Audio
+  m_Name: AudioCtrl
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -366,11 +412,12 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1475876491}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
-  m_Children: []
+  m_Children:
+  - {fileID: 914633393}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &1475876494
@@ -386,6 +433,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Controller.AudioController
   mixer: {fileID: 0}
+  clipProviderSource: {fileID: 914633394}
 --- !u!114 &1475876495
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -400,9 +448,19 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Controller.AudioControllerDebugMenu
   bgmClip: {fileID: 8300000, guid: d0deef9ee3e293c48b6b1c644533b765, type: 3}
   sfxClip: {fileID: 8300000, guid: f188971c7db04da49944d3ad892c2d98, type: 3}
-  sfxLoopClip: {fileID: 0}
+  sfxLoopClip: {fileID: 8300000, guid: f188971c7db04da49944d3ad892c2d98, type: 3}
   voiceClip: {fileID: 8300000, guid: ba34ee3e1efaed440b4f4df2085ca29e, type: 3}
-  voiceLoopClip: {fileID: 0}
+  voiceLoopClip: {fileID: 8300000, guid: ba34ee3e1efaed440b4f4df2085ca29e, type: 3}
+  bgmKey: ukulele_song
+  sfxKey: minigame_win
+  sfxKeyLoop: 0
+  voiceKey: minigame_drink
+  voiceKeyLoop: 0
+  keyAllowAsyncLoad: 1
+  masterVolume: 1
+  bgmVolume: 1
+  sfxVolume: 1
+  voiceVolume: 1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
