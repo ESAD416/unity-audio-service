@@ -7,14 +7,7 @@ namespace Controller.Audio
     /// </summary>
     public class AudioControllerDebugMenu : MonoBehaviour
     {
-        [Header("Test Clips")]
-        [SerializeField] private AudioClip bgmClip;
-        [SerializeField] private AudioClip sfxClip;
-        [SerializeField] private AudioClip sfxLoopClip;
-        [SerializeField] private AudioClip voiceClip;
-        [SerializeField] private AudioClip voiceLoopClip;
-
-        [Header("Test Keys")]
+        [Header("Test Clip Keys")]
         [SerializeField] private string bgmKey;
         [SerializeField] private string sfxKey;
         [SerializeField] private bool sfxKeyLoop;
@@ -40,12 +33,6 @@ namespace Controller.Audio
             return true;
         }
 
-        [ContextMenu("Audio/Play/BGM")]
-        private void ContextPlayBgm()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.PlayBgm(bgmClip);
-        }
         [ContextMenu("Audio/Play/BGM (Key)")]
         private void ContextPlayBgmByKey()
         {
@@ -57,18 +44,6 @@ namespace Controller.Audio
             }
             controller.PlayBgm(bgmKey, keyAllowAsyncLoad);
         }
-        [ContextMenu("Audio/Play/SFX (One Shot)")]
-        private void ContextPlaySfx()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.PlaySfx(sfxClip, false);
-        }
-        [ContextMenu("Audio/Play/SFX (Loop)")]
-        private void ContextPlaySfxLoop()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.PlaySfx(sfxLoopClip, true);
-        }
         [ContextMenu("Audio/Play/SFX (Key)")]
         private void ContextPlaySfxByKey()
         {
@@ -79,18 +54,6 @@ namespace Controller.Audio
                 return;
             }
             controller.PlaySfx(sfxKey, sfxKeyLoop, keyAllowAsyncLoad);
-        }
-        [ContextMenu("Audio/Play/Voice")]
-        private void ContextPlayVoice()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.PlayVoice(voiceClip, false);
-        }
-        [ContextMenu("Audio/Play/Voice (Loop)")]
-        private void ContextPlayVoiceLoop()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.PlayVoice(voiceLoopClip, true);
         }
         [ContextMenu("Audio/Play/Voice (Key)")]
         private void ContextPlayVoiceByKey()
