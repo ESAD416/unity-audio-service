@@ -12,8 +12,6 @@ namespace Controller.Audio
 
         [Header("AudioMixer")]
         [SerializeField] private AudioMixer mixer; // Assigned via Inspector when available
-        [Header("Clip Provider")]
-        [SerializeField] private MonoBehaviour clipProviderSource; // Should implement IAudioClipProvider
         private const string MIXER_DEFAULT_RESOURCE_PATH = "Audio/MasterMixer";
         private const string PARAM_MASTER = "masterVolume";
         private const string PARAM_BGM = "bgmVolume";
@@ -84,18 +82,7 @@ namespace Controller.Audio
 
         private void ResolveClipProvider()
         {
-            if (clipProviderSource != null)
-            {
-                if (clipProviderSource is IAudioClipProvider providerFromBehaviour)
-                {
-                    _clipProvider = providerFromBehaviour;
-                }
-                else
-                {
-                    Debug.LogWarning("[AudioController] Clip provider source does not implement IAudioClipProvider");
-                }
-            }
-
+            if (_clipProvider != null) return;
             if (_clipProvider == null && _globalClipProvider != null)
             {
                 _clipProvider = _globalClipProvider;
