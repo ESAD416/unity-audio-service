@@ -21,6 +21,16 @@ namespace Controller.Audio
         [Range(0f, 1f)] [SerializeField] private float sfxVolume = 1f;
         [Range(0f, 1f)] [SerializeField] private float voiceVolume = 1f;
 
+        [Header("Settings Handler")]
+        [SerializeField] private MonoBehaviour settingsHandlerSource;
+
+        private IAudioSettingsHandler _settingsHandler;
+
+        private void Awake()
+        {
+            ResolveSettingsHandler();
+        }
+
         private bool TryGetController(out AudioController controller)
         {
             controller = AudioController.Instance;
@@ -31,6 +41,51 @@ namespace Controller.Audio
             }
 
             return true;
+        }
+
+        private bool TryGetSettingsHandler(out IAudioSettingsHandler handler)
+        {
+            if (_settingsHandler != null)
+            {
+                handler = _settingsHandler;
+                return true;
+            }
+
+            if (settingsHandlerSource != null)
+            {
+                handler = settingsHandlerSource as IAudioSettingsHandler;
+                if (handler != null)
+                {
+                    _settingsHandler = handler;
+                    return true;
+                }
+
+                Debug.LogWarning("[AudioControllerDebugMenu] Settings handler source does not implement IAudioSettingsHandler.");
+            }
+
+            var bootstrap = FindFirstObjectByType<AudioBootstrap>(FindObjectsInactive.Include);
+            if (bootstrap != null && bootstrap.SettingsHandler != null)
+            {
+                _settingsHandler = bootstrap.SettingsHandler;
+                handler = _settingsHandler;
+                return true;
+            }
+
+            handler = null;
+            Debug.LogWarning("[AudioControllerDebugMenu] No settings handler available. Assign one on the component or ensure AudioBootstrap is active.");
+            return false;
+        }
+
+        private void ResolveSettingsHandler()
+        {
+            if (settingsHandlerSource != null)
+            {
+                _settingsHandler = settingsHandlerSource as IAudioSettingsHandler;
+                if (_settingsHandler == null)
+                {
+                    Debug.LogWarning("[AudioControllerDebugMenu] Settings handler source does not implement IAudioSettingsHandler.");
+                }
+            }
         }
 
         [ContextMenu("Audio/Play/BGM (Key)")]
@@ -109,6 +164,55 @@ namespace Controller.Audio
         {
             if (!TryGetController(out var controller)) return;
             controller.SetVoiceVolume(voiceVolume);
+        }
+
+        [ContextMenu("Audio/Settings/Set Master (Handler)")]
+        private void ContextSetMasterViaHandler()
+        {
+            if (!TryGetSettingsHandler(out var handler)) return;
+            handler.UpdateVolume(AudioChannel.Master, masterVolume);
+        }
+
+        [ContextMenu("Audio/Settings/Set BGM (Handler)")]
+        private void ContextSetBgmViaHandler()
+        {
+            if (!TryGetSettingsHandler(out var handler)) return;
+            handler.UpdateVolume(AudioChannel.Bgm, bgmVolume);
+        }
+
+        [ContextMenu("Audio/Settings/Set SFX (Handler)")]
+        private void ContextSetSfxViaHandler()
+        {
+            if (!TryGetSettingsHandler(out var handler)) return;
+            handler.UpdateVolume(AudioChannel.Sfx, sfxVolume);
+        }
+
+        [ContextMenu("Audio/Settings/Set Voice (Handler)")]
+        private void ContextSetVoiceViaHandler()
+        {
+            if (!TryGetSettingsHandler(out var handler)) return;
+            handler.UpdateVolume(AudioChannel.Voice, voiceVolume);
+        }
+
+        [ContextMenu("Audio/Settings/Clear PlayerPrefs")]
+        private void ContextClearPlayerPrefs()
+        {
+            if (_settingsHandler is AudioSettingsPlayerPrefs prefsHandler)
+            {
+                PlayerPrefs.DeleteKey("Audio.Master");
+                PlayerPrefs.DeleteKey("Audio.Bgm");
+                PlayerPrefs.DeleteKey("Audio.Sfx");
+                PlayerPrefs.DeleteKey("Audio.Voice");
+                Debug.Log("[AudioControllerDebugMenu] Cleared PlayerPrefs audio keys.");
+                prefsHandler.BroadcastStoredVolumes();
+                return;
+            }
+
+            PlayerPrefs.DeleteKey("Audio.Master");
+            PlayerPrefs.DeleteKey("Audio.Bgm");
+            PlayerPrefs.DeleteKey("Audio.Sfx");
+            PlayerPrefs.DeleteKey("Audio.Voice");
+            Debug.Log("[AudioControllerDebugMenu] Cleared PlayerPrefs audio keys (handler not cached).");
         }
     }
 }

@@ -24,7 +24,7 @@ namespace Controller.Audio
         [Range(0f, 1f)] [SerializeField] private float defaultVoice = 1f;
 
         [Header("Persistence")]
-        [SerializeField] private bool saveImmediately = true;
+        [SerializeField] private bool saveImmediately = false;
 
         private float _master;
         private float _bgm;
