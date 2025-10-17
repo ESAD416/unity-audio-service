@@ -286,6 +286,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Controller.AudioControllerDebugMenu
   bgmKey: ukulele_song
+  bgmTransitionKey: maou_bgm_acoustic50
   sfxKey: minigame_win
   sfxKeyLoop: 0
   voiceKey: minigame_drink

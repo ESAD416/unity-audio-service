@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Audio;
 
@@ -7,7 +8,7 @@ namespace Controller.Audio
 {
     public class AudioController : MonoBehaviour
     {
-        private static readonly bool VerboseLogging = false;
+        private static readonly bool VerboseLogging = true;
         public static AudioController Instance { get; private set; }
 
         [Header("AudioMixer")]
@@ -31,13 +32,21 @@ namespace Controller.Audio
         // Dedicated looping Voice source (like Sound_Loop)
         private AudioSource _voiceLoopSource;
 
+        private readonly Dictionary<AudioSource, Coroutine> _activeFades = new();
+        private Coroutine _bgmTransitionCoroutine;
+
         private static IAudioClipProvider _globalClipProvider;
+        private static bool _globalClipProviderIsUnityObject;
+        private static UnityEngine.Object _globalClipProviderUnityRef;
+
         private IAudioClipProvider _clipProvider;
-        public IAudioClipProvider ClipProvider => _clipProvider;
+        private bool _clipProviderIsUnityObject;
+        private UnityEngine.Object _clipProviderUnityRef;
+        public IAudioClipProvider ClipProvider => TryGetClipProvider(out var provider) ? provider : null;
 
         public static void RegisterClipProvider(IAudioClipProvider provider)
         {
-            _globalClipProvider = provider;
+            CacheGlobalClipProvider(provider);
             if (Instance != null)
             {
                 Instance.SetClipProvider(provider);
@@ -47,8 +56,105 @@ namespace Controller.Audio
         public void SetClipProvider(IAudioClipProvider provider)
         {
             _clipProvider = provider;
+            if (provider is UnityEngine.Object unityObject)
+            {
+                _clipProviderIsUnityObject = true;
+                _clipProviderUnityRef = unityObject;
+            }
+            else
+            {
+                _clipProviderIsUnityObject = false;
+                _clipProviderUnityRef = null;
+            }
         }
 
+        private bool TryGetClipProvider(out IAudioClipProvider provider)
+        {
+            if (!EnsureClipProviderAlive())
+            {
+                provider = null;
+                return false;
+            }
+
+            provider = _clipProvider;
+            return provider != null;
+        }
+
+        private bool EnsureClipProviderAlive()
+        {
+            if (_clipProvider == null)
+            {
+                return TryAdoptGlobalClipProvider();
+            }
+
+            if (_clipProviderIsUnityObject && _clipProviderUnityRef == null)
+            {
+                Debug.LogWarning("[AudioController] Clip provider has been destroyed; clearing reference.");
+                ClearClipProvider();
+                return TryAdoptGlobalClipProvider();
+            }
+
+            return true;
+        }
+
+        private void ClearClipProvider()
+        {
+            _clipProvider = null;
+            _clipProviderIsUnityObject = false;
+            _clipProviderUnityRef = null;
+        }
+
+        private bool TryAdoptGlobalClipProvider()
+        {
+            if (!IsGlobalClipProviderAlive())
+            {
+                return false;
+            }
+
+            _clipProvider = _globalClipProvider;
+            _clipProviderIsUnityObject = _globalClipProviderIsUnityObject;
+            _clipProviderUnityRef = _globalClipProviderUnityRef;
+            return _clipProvider != null;
+        }
+
+        private static void CacheGlobalClipProvider(IAudioClipProvider provider)
+        {
+            _globalClipProvider = provider;
+            if (provider is UnityEngine.Object unityObject)
+            {
+                _globalClipProviderIsUnityObject = true;
+                _globalClipProviderUnityRef = unityObject;
+            }
+            else
+            {
+                _globalClipProviderIsUnityObject = false;
+                _globalClipProviderUnityRef = null;
+            }
+        }
+
+        private static bool IsGlobalClipProviderAlive()
+        {
+            if (_globalClipProvider == null)
+            {
+                return false;
+            }
+
+            if (_globalClipProviderIsUnityObject && _globalClipProviderUnityRef == null)
+            {
+                Debug.LogWarning("[AudioController] Global clip provider has been destroyed; clearing registration.");
+                ClearGlobalClipProvider();
+                return false;
+            }
+
+            return true;
+        }
+
+        private static void ClearGlobalClipProvider()
+        {
+            _globalClipProvider = null;
+            _globalClipProviderIsUnityObject = false;
+            _globalClipProviderUnityRef = null;
+        }
 
         private void Awake()
         {
@@ -82,13 +188,9 @@ namespace Controller.Audio
 
         private void ResolveClipProvider()
         {
-            if (_clipProvider != null) return;
-            if (_clipProvider == null && _globalClipProvider != null)
-            {
-                _clipProvider = _globalClipProvider;
-            }
+            if (TryGetClipProvider(out _)) return;
 
-            if (_clipProvider == null && VerboseLogging)
+            if (VerboseLogging)
             {
                 Debug.Log("[AudioController] No clip provider assigned; key-based clip loading unavailable");
             }
@@ -199,11 +301,200 @@ namespace Controller.Audio
 
             return source;
         }
+
+        #region Fade Helpers
+
+        private void StopFade(AudioSource source)
+        {
+            if (source == null) return;
+            if (_activeFades.TryGetValue(source, out var routine) && routine != null)
+            {
+                StopCoroutine(routine);
+            }
+            _activeFades.Remove(source);
+        }
+
+        private void FadeSource(AudioSource source, float targetVolume, float seconds, bool stopAfter = false, bool clearClip = false)
+        {
+            if (source == null) return;
+
+            targetVolume = Mathf.Clamp01(targetVolume);
+            if (seconds <= 0f)
+            {
+                StopFade(source);
+                source.volume = targetVolume;
+                if (stopAfter)
+                {
+                    source.Stop();
+                    if (clearClip)
+                    {
+                        source.clip = null;
+                    }
+                }
+                return;
+            }
+
+            StopFade(source);
+            var routine = StartCoroutine(FadeAndFinalizeRoutine(source, targetVolume, seconds, stopAfter, clearClip));
+            _activeFades[source] = routine;
+        }
+
+        private IEnumerator FadeAndFinalizeRoutine(AudioSource source, float targetVolume, float seconds, bool stopAfter, bool clearClip)
+        {
+            yield return FadeSourceRoutine(source, targetVolume, seconds);
+
+            if (source != null && stopAfter)
+            {
+                source.Stop();
+                if (clearClip)
+                {
+                    source.clip = null;
+                }
+            }
+
+            _activeFades.Remove(source);
+        }
+
+        private IEnumerator FadeSourceRoutine(AudioSource source, float targetVolume, float seconds)
+        {
+            if (source == null) yield break;
+
+            var start = source.volume;
+            targetVolume = Mathf.Clamp01(targetVolume);
+            seconds = Mathf.Max(0f, seconds);
+
+            if (seconds <= 0f)
+            {
+                source.volume = targetVolume;
+                yield break;
+            }
+
+            // Wait until the next frame so the fade duration is not impacted by inspector interactions.
+            yield return null;
+            if (source == null) yield break;
+
+            var startTime = Time.realtimeSinceStartup;
+            var endTime = startTime + seconds;
+
+            while (source != null)
+            {
+                var now = Time.realtimeSinceStartup;
+                var t = Mathf.InverseLerp(startTime, endTime, now);
+                source.volume = Mathf.Lerp(start, targetVolume, t);
+
+                if (t >= 1f)
+                {
+                    break;
+                }
+
+                yield return null;
+            }
+
+            if (source != null)
+            {
+                source.volume = targetVolume;
+            }
+        }
+
+        public void FadeBgmTo(float targetVolume, float seconds)
+        {
+            FadeSource(_bgmSource, targetVolume, seconds);
+        }
+
+        public void FadeBgmOut(float seconds, bool stopAfter = true)
+        {
+            FadeSource(_bgmSource, 0f, seconds, stopAfter, clearClip: stopAfter);
+        }
+
+        public void FadeSfxLoopTo(float targetVolume, float seconds)
+        {
+            FadeSource(_sfxLoopSource, targetVolume, seconds);
+        }
+
+        public void FadeVoiceLoopTo(float targetVolume, float seconds)
+        {
+            FadeSource(_voiceLoopSource, targetVolume, seconds);
+        }
+
+        public void FadeChannel(AudioChannel channel, float targetVolume, float seconds, bool stopAfter = false, bool useLoopSource = false)
+        {
+            AudioSource source = null;
+            switch (channel)
+            {
+                case AudioChannel.Master:
+                case AudioChannel.Bgm:
+                    source = _bgmSource;
+                    break;
+                case AudioChannel.Sfx:
+                    source = useLoopSource ? _sfxLoopSource : _sfxSource;
+                    break;
+                case AudioChannel.Voice:
+                    source = useLoopSource ? _voiceLoopSource : _voiceSource;
+                    break;
+            }
+
+            var clearClip = stopAfter && (channel == AudioChannel.Bgm || useLoopSource);
+            FadeSource(source, targetVolume, seconds, stopAfter, clearClip);
+        }
+
+        private void StopBgmTransition()
+        {
+            if (_bgmTransitionCoroutine != null)
+            {
+                StopCoroutine(_bgmTransitionCoroutine);
+                _bgmTransitionCoroutine = null;
+            }
+        }
+
+        private IEnumerator TransitionBgmClip(AudioClip nextClip, float fadeOutSeconds, float fadeInSeconds)
+        {
+            if (_bgmSource == null)
+            {
+                yield break;
+            }
+
+            StopFade(_bgmSource);
+
+            if (fadeOutSeconds > 0f && _bgmSource.isPlaying && _bgmSource.clip != null)
+            {
+                yield return FadeSourceRoutine(_bgmSource, 0f, fadeOutSeconds);
+                _bgmSource.Stop();
+                _bgmSource.clip = null;
+            }
+            else
+            {
+                if (_bgmSource.isPlaying)
+                {
+                    _bgmSource.Stop();
+                }
+                _bgmSource.clip = null;
+            }
+
+            if (nextClip == null)
+            {
+                _bgmTransitionCoroutine = null;
+                yield break;
+            }
+
+            _bgmSource.clip = nextClip;
+            _bgmSource.loop = true;
+            _bgmSource.volume = fadeInSeconds > 0f ? 0f : 1f;
+            _bgmSource.Play();
+
+            if (fadeInSeconds > 0f)
+            {
+                yield return FadeSourceRoutine(_bgmSource, 1f, fadeInSeconds);
+            }
+
+            _bgmTransitionCoroutine = null;
+        }
+
+        #endregion
         #endregion
 
         #region Play Audio
 
-        public void PlayBgm(AudioClip clip)
+        public void PlayBgm(AudioClip clip, float fadeOutSeconds = 0f, float fadeInSeconds = 0f)
         {
             if (clip == null)
             {
@@ -221,15 +512,34 @@ namespace Controller.Audio
                 }
             }
 
-            _bgmSource.clip = clip;
-            _bgmSource.loop = true;
-            _bgmSource.volume = 1f;
-            _bgmSource.Play();
+            StopBgmTransition();
+
+            if (fadeOutSeconds > 0f && _bgmSource.isPlaying && _bgmSource.clip != null)
+            {
+                _bgmTransitionCoroutine = StartCoroutine(TransitionBgmClip(clip, fadeOutSeconds, fadeInSeconds));
+            }
+            else
+            {
+                StopFade(_bgmSource);
+                if (_bgmSource.isPlaying)
+                {
+                    _bgmSource.Stop();
+                }
+                _bgmSource.clip = clip;
+                _bgmSource.loop = true;
+                _bgmSource.volume = fadeInSeconds > 0f ? 0f : 1f;
+                _bgmSource.Play();
+
+                if (fadeInSeconds > 0f)
+                {
+                    FadeSource(_bgmSource, 1f, fadeInSeconds);
+                }
+            }
 
             if (VerboseLogging) Debug.Log($"[AudioController] Playing BGM clip: {clip.name}");
         }
 
-        public void PlaySfx(AudioClip clip, bool loop = false)
+        public void PlaySfx(AudioClip clip, bool loop = false, float fadeInSeconds = 0f)
         {
             if (clip == null)
             {
@@ -250,10 +560,16 @@ namespace Controller.Audio
                     return;
                 }
 
+                _sfxLoopSource.Stop();
                 _sfxLoopSource.clip = clip;
                 _sfxLoopSource.loop = true;
-                _sfxLoopSource.volume = 1f;
+                _sfxLoopSource.volume = fadeInSeconds > 0f ? 0f : 1f;
                 _sfxLoopSource.Play();
+
+                if (fadeInSeconds > 0f)
+                {
+                    FadeSource(_sfxLoopSource, 1f, fadeInSeconds);
+                }
 
                 if (VerboseLogging) Debug.Log($"[AudioController] Playing looping SFX clip: {clip.name}");
             }
@@ -265,13 +581,14 @@ namespace Controller.Audio
                     return;
                 }
 
+                StopFade(_sfxSource);
                 _sfxSource.PlayOneShot(clip);
 
                 if (VerboseLogging) Debug.Log($"[AudioController] Playing one-shot SFX clip: {clip.name}");
             }
         }
 
-        public void PlayVoice(AudioClip clip, bool loop = false)
+        public void PlayVoice(AudioClip clip, bool loop = false, float fadeInSeconds = 0f)
         {
             if (clip == null)
             {
@@ -292,10 +609,16 @@ namespace Controller.Audio
                     return;
                 }
 
+                _voiceLoopSource.Stop();
                 _voiceLoopSource.clip = clip;
                 _voiceLoopSource.loop = true;
-                _voiceLoopSource.volume = 1f;
+                _voiceLoopSource.volume = fadeInSeconds > 0f ? 0f : 1f;
                 _voiceLoopSource.Play();
+
+                if (fadeInSeconds > 0f)
+                {
+                    FadeSource(_voiceLoopSource, 1f, fadeInSeconds);
+                }
 
                 if (VerboseLogging) Debug.Log($"[AudioController] Playing looping voice clip: {clip.name}");
             }
@@ -307,10 +630,16 @@ namespace Controller.Audio
                     return;
                 }
 
+                StopFade(_voiceSource);
                 _voiceSource.loop = false;
                 _voiceSource.clip = clip;
-                _voiceSource.volume = 1f;
+                _voiceSource.volume = fadeInSeconds > 0f ? 0f : 1f;
                 _voiceSource.Play();
+
+                if (fadeInSeconds > 0f)
+                {
+                    FadeSource(_voiceSource, 1f, fadeInSeconds);
+                }
 
                 if (VerboseLogging) Debug.Log($"[AudioController] Playing voice clip: {clip.name}");
             }
@@ -320,19 +649,19 @@ namespace Controller.Audio
 
         #region Play Audio By Key
 
-        public void PlayBgm(string key, bool allowAsyncLoad = true)
+        public void PlayBgm(string key, bool allowAsyncLoad = true, float fadeOutSeconds = 0f, float fadeInSeconds = 0f)
         {
-            PlayByKey(AudioCategory.Bgm, key, PlayBgm, allowAsyncLoad);
+            PlayByKey(AudioCategory.Bgm, key, clip => PlayBgm(clip, fadeOutSeconds, fadeInSeconds), allowAsyncLoad);
         }
 
-        public void PlaySfx(string key, bool loop = false, bool allowAsyncLoad = true)
+        public void PlaySfx(string key, bool loop = false, bool allowAsyncLoad = true, float fadeInSeconds = 0f)
         {
-            PlayByKey(AudioCategory.Sfx, key, clip => PlaySfx(clip, loop), allowAsyncLoad);
+            PlayByKey(AudioCategory.Sfx, key, clip => PlaySfx(clip, loop, fadeInSeconds), allowAsyncLoad);
         }
 
-        public void PlayVoice(string key, bool loop = false, bool allowAsyncLoad = true)
+        public void PlayVoice(string key, bool loop = false, bool allowAsyncLoad = true, float fadeInSeconds = 0f)
         {
-            PlayByKey(AudioCategory.Voice, key, clip => PlayVoice(clip, loop), allowAsyncLoad);
+            PlayByKey(AudioCategory.Voice, key, clip => PlayVoice(clip, loop, fadeInSeconds), allowAsyncLoad);
         }
 
         private void PlayByKey(AudioCategory category, string key, Action<AudioClip> playAction, bool allowAsyncLoad)
@@ -343,13 +672,13 @@ namespace Controller.Audio
                 return;
             }
 
-            if (_clipProvider == null)
+            if (!TryGetClipProvider(out var provider))
             {
-                Debug.LogWarning($"[AudioController] No clip provider set, cannot play {category} with key {key}");
+                Debug.LogWarning($"[AudioController] No clip provider available, cannot play {category} with key {key}");
                 return;
             }
 
-            if (_clipProvider.TryGetClip(category, key, out var clip) && clip != null)
+            if (provider.TryGetClip(category, key, out var clip) && clip != null)
             {
                 playAction?.Invoke(clip);
                 return;
@@ -361,7 +690,7 @@ namespace Controller.Audio
                 return;
             }
 
-            if (_clipProvider is IAsyncAudioClipProvider asyncProvider)
+            if (provider is IAsyncAudioClipProvider asyncProvider)
             {
                 StartCoroutine(LoadAndPlayAsync(asyncProvider, category, key, playAction));
                 return;
@@ -374,12 +703,12 @@ namespace Controller.Audio
         {
             yield return asyncProvider.LoadClipAsync(category, key);
 
-            if (_clipProvider == null)
+            if (!TryGetClipProvider(out var provider))
             {
                 yield break;
             }
 
-            if (_clipProvider.TryGetClip(category, key, out var clip) && clip != null)
+            if (provider.TryGetClip(category, key, out var clip) && clip != null)
             {
                 playAction?.Invoke(clip);
             }
@@ -393,42 +722,84 @@ namespace Controller.Audio
 
         #region Stop Audio
 
-        public void StopBgm()
+        public void StopBgm(float fadeOutSeconds = 0f)
         {
             if (_bgmSource == null) return;
-            _bgmSource.Stop();
-            _bgmSource.clip = null;
+            StopBgmTransition();
+            if (fadeOutSeconds > 0f)
+            {
+                FadeSource(_bgmSource, 0f, fadeOutSeconds, true, clearClip: true);
+            }
+            else
+            {
+                StopFade(_bgmSource);
+                _bgmSource.Stop();
+                _bgmSource.clip = null;
+            }
             if (VerboseLogging) Debug.Log("[AudioController] BGM stopped");
         }
 
-        public void StopSfx(bool stopLoopOnly = false)
+        public void StopSfx(bool stopLoopOnly = false, float fadeOutSeconds = 0f)
         {
             if (_sfxSource != null && !stopLoopOnly)
             {
-                _sfxSource.Stop();
+                if (fadeOutSeconds > 0f)
+                {
+                    FadeSource(_sfxSource, 0f, fadeOutSeconds, true, clearClip: true);
+                }
+                else
+                {
+                    StopFade(_sfxSource);
+                    _sfxSource.Stop();
+                    _sfxSource.clip = null;
+                }
             }
 
             if (_sfxLoopSource != null)
             {
-                _sfxLoopSource.Stop();
-                _sfxLoopSource.clip = null;
+                if (fadeOutSeconds > 0f)
+                {
+                    FadeSource(_sfxLoopSource, 0f, fadeOutSeconds, true, clearClip: true);
+                }
+                else
+                {
+                    StopFade(_sfxLoopSource);
+                    _sfxLoopSource.Stop();
+                    _sfxLoopSource.clip = null;
+                }
             }
 
             if (VerboseLogging) Debug.Log("[AudioController] SFX stopped");
         }
 
-        public void StopVoice(bool stopLoopOnly = false)
+        public void StopVoice(bool stopLoopOnly = false, float fadeOutSeconds = 0f)
         {
             if (_voiceSource != null && !stopLoopOnly)
             {
-                _voiceSource.Stop();
-                _voiceSource.clip = null;
+                if (fadeOutSeconds > 0f)
+                {
+                    FadeSource(_voiceSource, 0f, fadeOutSeconds, true, clearClip: true);
+                }
+                else
+                {
+                    StopFade(_voiceSource);
+                    _voiceSource.Stop();
+                    _voiceSource.clip = null;
+                }
             }
 
             if (_voiceLoopSource != null)
             {
-                _voiceLoopSource.Stop();
-                _voiceLoopSource.clip = null;
+                if (fadeOutSeconds > 0f)
+                {
+                    FadeSource(_voiceLoopSource, 0f, fadeOutSeconds, true, clearClip: true);
+                }
+                else
+                {
+                    StopFade(_voiceLoopSource);
+                    _voiceLoopSource.Stop();
+                    _voiceLoopSource.clip = null;
+                }
             }
 
             if (VerboseLogging) Debug.Log("[AudioController] Voice stopped");

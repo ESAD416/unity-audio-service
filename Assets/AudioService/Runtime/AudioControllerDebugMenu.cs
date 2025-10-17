@@ -9,6 +9,7 @@ namespace Controller.Audio
     {
         [Header("Test Clip Keys")]
         [SerializeField] private string bgmKey;
+        [SerializeField] private string bgmTransitionKey;
         [SerializeField] private string sfxKey;
         [SerializeField] private bool sfxKeyLoop;
         [SerializeField] private string voiceKey;
@@ -213,6 +214,76 @@ namespace Controller.Audio
             PlayerPrefs.DeleteKey("Audio.Sfx");
             PlayerPrefs.DeleteKey("Audio.Voice");
             Debug.Log("[AudioControllerDebugMenu] Cleared PlayerPrefs audio keys (handler not cached).");
+        }
+
+        [ContextMenu("Audio/Fade/BGM Fade Out 1s")]
+        private void ContextFadeOutBgm()
+        {
+            if (!TryGetController(out var controller)) return;
+            controller.StopBgm(1f);
+        }
+
+        [ContextMenu("Audio/Fade/BGM Fade In 1s")]
+        private void ContextFadeInBgm()
+        {
+            if (!TryGetController(out var controller)) return;
+            if (string.IsNullOrEmpty(bgmKey))
+            {
+                Debug.LogWarning("[AudioControllerDebugMenu] BGM key is empty for fade in test");
+                return;
+            }
+            controller.PlayBgm(bgmKey, keyAllowAsyncLoad, 0f, 1f);
+        }
+
+        [ContextMenu("Audio/Fade/BGM Transition 1s/1s")]
+        private void ContextTransitionBgm()
+        {
+            if (!TryGetController(out var controller)) return;
+            if (string.IsNullOrEmpty(bgmTransitionKey))
+            {
+                Debug.LogWarning("[AudioControllerDebugMenu] Transition BGM key is empty");
+                return;
+            }
+
+            controller.PlayBgm(bgmTransitionKey, keyAllowAsyncLoad, 1f, 1f);
+        }
+
+        [ContextMenu("Audio/Fade/SFX Loop Fade 1s")]
+        private void ContextFadeSfxLoop()
+        {
+            if (!TryGetController(out var controller)) return;
+            if (string.IsNullOrEmpty(sfxKey))
+            {
+                Debug.LogWarning("[AudioControllerDebugMenu] SFX key is empty for fade test");
+                return;
+            }
+            controller.PlaySfx(sfxKey, true, keyAllowAsyncLoad, 1f);
+        }
+
+        [ContextMenu("Audio/Fade/SFX Loop Fade Out 1s")]
+        private void ContextFadeOutSfxLoop()
+        {
+            if (!TryGetController(out var controller)) return;
+            controller.StopSfx(stopLoopOnly: false, fadeOutSeconds: 1f);
+        }
+
+        [ContextMenu("Audio/Fade/Voice Loop Fade 1s")]
+        private void ContextFadeVoiceLoop()
+        {
+            if (!TryGetController(out var controller)) return;
+            if (string.IsNullOrEmpty(voiceKey))
+            {
+                Debug.LogWarning("[AudioControllerDebugMenu] Voice key is empty for fade test");
+                return;
+            }
+            controller.PlayVoice(voiceKey, true, keyAllowAsyncLoad, 1f);
+        }
+
+        [ContextMenu("Audio/Fade/Voice Loop Fade Out 1s")]
+        private void ContextFadeOutVoiceLoop()
+        {
+            if (!TryGetController(out var controller)) return;
+            controller.StopVoice(stopLoopOnly: false, fadeOutSeconds: 1f);
         }
     }
 }
