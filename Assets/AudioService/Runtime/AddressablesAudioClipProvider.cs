@@ -39,28 +39,33 @@ namespace Controller.Audio
                 return true;
             }
 
-            var handle = Addressables.LoadAssetAsync<AudioClip>(key);
-            if (!handle.IsDone)
+            if (_handles.TryGetValue(key, out var handle))
             {
-                handle.WaitForCompletion();
-            }
-
-            if (handle.Status == AsyncOperationStatus.Succeeded)
-            {
-                clip = handle.Result;
-                _cache[key] = clip;
-                if (!_handles.ContainsKey(key))
+                if (!handle.IsValid())
                 {
-                    _handles[key] = handle;
+                    _handles.Remove(key);
+                    return false;
                 }
-                return true;
+
+                if (handle.IsDone)
+                {
+                    if (handle.Status == AsyncOperationStatus.Succeeded && handle.Result != null)
+                    {
+                        clip = handle.Result;
+                        _cache[key] = clip;
+                        return true;
+                    }
+
+                    if (handle.IsValid())
+                    {
+                        Addressables.Release(handle);
+                    }
+                    _handles.Remove(key);
+                }
+
+                return false;
             }
 
-            Debug.LogWarning($"[AddressablesAudioClipProvider] Failed to load clip for key: {key}");
-            if (handle.IsValid())
-            {
-                Addressables.Release(handle);
-            }
             return false;
         }
 
@@ -96,6 +101,14 @@ namespace Controller.Audio
                 if (existingHandle.Status == AsyncOperationStatus.Succeeded && existingHandle.Result != null)
                 {
                     _cache[key] = existingHandle.Result;
+                }
+                else if (existingHandle.IsDone)
+                {
+                    if (existingHandle.IsValid())
+                    {
+                        Addressables.Release(existingHandle);
+                    }
+                    _handles.Remove(key);
                 }
                 yield break;
             }
