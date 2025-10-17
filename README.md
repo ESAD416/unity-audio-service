@@ -78,7 +78,7 @@
 
 ---
 
-## Addressables 与預載策略
+## Addressables 與預載策略
 
 - `AddressablesAudioClipProvider` 預設支援：
   - 快取：使用 `_cache` 儲存成功載入的 `AudioClip`。
