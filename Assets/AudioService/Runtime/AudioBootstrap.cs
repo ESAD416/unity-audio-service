@@ -97,7 +97,7 @@ namespace Controller.Audio
                 _controller = AudioController.Instance;
                 if (_controller == null)
                 {
-                    _controller = FindFirstObjectByType<AudioController>(FindObjectsInactive.Include);
+                    _controller = FindAnyObjectByType<AudioController>(FindObjectsInactive.Include);
                 }
             }
 

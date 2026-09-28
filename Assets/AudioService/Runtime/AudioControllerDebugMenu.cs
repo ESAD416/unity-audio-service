@@ -64,7 +64,7 @@ namespace Controller.Audio
                 Debug.LogWarning("[AudioControllerDebugMenu] Settings handler source does not implement IAudioSettingsHandler.");
             }
 
-            var bootstrap = FindFirstObjectByType<AudioBootstrap>(FindObjectsInactive.Include);
+            var bootstrap = FindAnyObjectByType<AudioBootstrap>(FindObjectsInactive.Include);
             if (bootstrap != null && bootstrap.SettingsHandler != null)
             {
                 _settingsHandler = bootstrap.SettingsHandler;
