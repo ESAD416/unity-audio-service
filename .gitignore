@@ -143,3 +143,13 @@ superclaude/
 *superclaude*
 *SuperClaude*
 AGENTS.md
+
+# macOS Finder metadata
+.DS_Store
+
+# Local-only audio validation and temporary artifacts
+/Assets/AudioService/Tests/
+/Assets/AudioService/Tests.meta
+/Tools/AudioService/
+/Tools/AudioService.meta
+/work/
