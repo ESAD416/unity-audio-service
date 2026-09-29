@@ -198,22 +198,13 @@ namespace Controller.Audio
         [ContextMenu("Audio/Settings/Clear PlayerPrefs")]
         private void ContextClearPlayerPrefs()
         {
-            if (_settingsHandler is AudioSettingsPlayerPrefs prefsHandler)
+            if (!TryGetSettingsHandler(out var handler)) return;
+            if (handler is IAudioSettingsMaintenance maintenance)
             {
-                PlayerPrefs.DeleteKey("Audio.Master");
-                PlayerPrefs.DeleteKey("Audio.Bgm");
-                PlayerPrefs.DeleteKey("Audio.Sfx");
-                PlayerPrefs.DeleteKey("Audio.Voice");
-                Debug.Log("[AudioControllerDebugMenu] Cleared PlayerPrefs audio keys.");
-                prefsHandler.BroadcastStoredVolumes();
-                return;
+                maintenance.ResetSettings();
+                Debug.Log("[AudioControllerDebugMenu] Reset actual handler keys and in-memory volumes.");
             }
-
-            PlayerPrefs.DeleteKey("Audio.Master");
-            PlayerPrefs.DeleteKey("Audio.Bgm");
-            PlayerPrefs.DeleteKey("Audio.Sfx");
-            PlayerPrefs.DeleteKey("Audio.Voice");
-            Debug.Log("[AudioControllerDebugMenu] Cleared PlayerPrefs audio keys (handler not cached).");
+            else Debug.LogWarning("[AudioControllerDebugMenu] Settings handler does not support reset.");
         }
 
         [ContextMenu("Audio/Fade/BGM Fade Out 1s")]

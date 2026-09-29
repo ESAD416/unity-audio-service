@@ -1,5 +1,26 @@
 # 變更紀錄
 
+## Unreleased — 第二階段可重用核心（2026-09-29）
+
+- 舊 `void Play*` 簽名保留，轉交共用播放核心；新增 `AudioHandle`／`PlayOptions`，可獨立停止、暫停、恢復及區分完成、停止、取消、失敗與拒絕。已結束 handle 不影響重用聲源，晚訂閱立即通知結果。
+- 新增 `AudioCatalog` 與分類內的邏輯 ID／別名／不同 Provider key 映射。Fallback 可選 PreferAvailable 或 PrimaryThenBackup；改變政策會刷新待播放與快取世代。
+- 新增素材 lease、共用載入、群組預載及安全釋放；Addressables 合併實際相同位置的 address／GUID。Provider 更換／銷毀或 ReleaseClip 不會提前釋放已取得的有效 lease；外部 clip 不由服務卸載。
+- 新增可重用聲源、全域／單音效並發限制及拒絕／替換最舊政策；Loading 預約也納入上限。預設 0 不限數量，請依場景設定。
+- 新增 FadeBus、獨立遊戲／背景／個別暫停、靜音、Mixer 驗證與無 Mixer 增益備援，以及播放／池／快取診斷。
+- 新增 Initialize／Ready／Shutdown 與 Provider 註冊所有權，處理重複 Prefab、additive 場景、停用／重啟及無 Domain Reload 重入。設定 Reset 使用 handler 實際 key，重載記憶體並廣播。
+
+### 行為與遷移
+
+- 非循環 SFX 現在使用獨立聲源，支援單次淡入。舊 FadeChannel 的循環／非循環選擇僅作用於舊 API 分支；跨新舊實例的分類淡出使用 FadeBus。
+- 新建 Addressables provider 預設按需載入，不再自動遍歷全 catalog；已有序列化預載旗標仍保留，亦可明確 Preload 指定群組。
+- `saveImmediately=true` 現改為延後合併 Save，預設閒置 0.25 秒後儲存；需要即刻落盤時呼叫 Flush。停用與背景切換也會 Flush。
+- Resources 舊 TryGetClip 仍可同步載入；TryGetCachedClip 純查快取。AllowAsyncLoad=false 不等待既有載入，Addressables 只取已駐留素材並取得自身 lease。
+- 原 Provider 介面保留。外部 Provider 如需服務可追蹤的持有保證，可採 `IAudioClipLeaseProvider`／`IAudioSynchronousClipProvider`；舊 coroutine 介面由 adapter 保持相容。詳見 README。
+
+### 驗證
+
+Unity 6000.6.3f1／Addressables 2.11.2：92 項 PlayMode（含原有 39 項）全部通過；兩種關閉 Reload 的 Play Mode 重入情境通過。原場景實際輸出、分別停止／暫停／恢復、分類淡出及兩輪 24 聲音池重用通過。測試與工具僅保留本機。Player、content build、其他版本／平台、長時間效能與套件化仍待第三階段；完整紀錄見改善計畫 §5.4。
+
 ## Unreleased — 第一階段播放可靠性（2026-09-29）
 
 - 修正舊非同步請求覆蓋新播放、停止後重啟、Provider 更換後誤播。保留 SFX one-shot 並發及只停止循環分支的行為。

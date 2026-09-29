@@ -1,162 +1,165 @@
-# Unity Audio Service Module 指南
+# Unity Audio Service
 
-面向整合、開發與維護本音訊模組的工程師。內容涵蓋功能概覽、需求條件、使用流程、自訂擴充方式、預載建議與實務注意事項。
+2D 音訊服務，提供 BGM／SFX／Voice、獨立播放 handle、可重用聲源、非同步載入、素材持有與音量設定。第一、第二階段已實作；UPM 套件分離仍屬第三階段。
 
----
+## 目前驗證環境
 
-## 功能總覽
+- Unity `6000.6.3f1`、Addressables `2.11.2`、Unity Test Framework `1.8.0`。
+- Runtime assembly：`Controller.Audio`，目前仍依賴 `Unity.Addressables`／`Unity.ResourceManager`。尚未支援不安裝 Addressables 的獨立核心套件。
+- 已驗證本機 Editor／PlayMode、原始 Prefab／場景、Addressables Editor 資產模式及無 Domain Reload 的 Play Mode 重入。
+- Addressables content build、Player、其他 Unity 版本與平台尚未驗證。不得將 Editor 通過視為已完成部署驗證。
 
-- **核心控制**：`AudioController` 管理 BGM / SFX / Voice 三類聲音播放、淡入淡出、切換、音量控制，支援 key-based 播放與非同步載入。
-- **提供者架構**：透過 `IAudioClipProvider` / `IAsyncAudioClipProvider` 抽象音訊來源，內建 Resources、Addressables、Fallback 雙來源等實作。
-- **設定持久化**：`IAudioSettingsHandler` 定義音量保存介面；預設 `AudioSettingsPlayerPrefs` 實作 PlayerPrefs 儲存與同步。
-- **啟動整合**：`AudioBootstrap` 協助在場景中連接控制器、clip provider 與設定 handler，可選擇自動套用與廣播既有音量。
-- **除錯工具**：`AudioControllerDebugMenu` 透過 Unity `ContextMenu` 提供假資料播放、音量調整、清除偏好設定等測試操作。
+## 快速導入
 
----
-
-## 系統需求與相容性
-
-- **目前驗證環境**：Unity `6000.6.3f1`、Addressables `2.11.2`、Unity Test Framework `1.8.0`。第一階段已完成 Editor／PlayMode 播放驗證；Player 建置、Addressables content build 與其他 Unity 版本尚未驗證。
-- **腳本 assembly**：Runtime 使用 `Controller.Audio.asmdef`，明確引用 `Unity.Addressables` 與 `Unity.ResourceManager`；現有腳本 GUID 保留。原始場景與 Prefab 已通過播放及引用檢查。
-- **目前依賴**：此階段需安裝 Addressables。將核心與 Addressables adapter 分離、提供完全無 Addressables 的安裝方式，屬第三階段工作。
-
----
-
-## 快速導入 (推薦流程)
-
-1. **拖入 Prefab**  
-   - 將 `Assets/AudioService/Runtime/Prefabs/AudioCtrl.prefab` 放到入口場景。  
-   - Prefab 包含 `AudioController`、`FallbackAudioClipProvider`（Addressables + Resources 雙來源）與 `AudioSettingsPlayerPrefs`。
-
-2. **確保常駐**  
-   - `AudioController` 會在 `Awake` 時 `DontDestroyOnLoad`。若你的專案有自己管理跨場景物件，請確保 Prefab 在專案中只被實例化一次。
-
-3. **配置 Mixer (選擇性)**  
-   - 預設會載入 `Resources/Audio/MasterMixer`。若使用自訂 Mixer，請在 Inspector 指定或修改路徑。
-
-4. **音量 UI / 設定**  
-   - 透過 `AudioBootstrap` 提供的 `ApplyVolume` 或直接呼叫 `AudioController.Set*Volume` 控制音量。  
-   - 若使用 PlayerPrefs handler，音量變動會立即儲存 (`saveImmediately=true` 可開關)。
-
-5. **播放音效**  
-   - 直接呼叫 `AudioController.Instance.PlayBgm("key")` 等 API。Key 必須是對應 provider 能解析的識別字串。
-
-6. **非同步載入**  
-   - `PlayBgm/PlaySfx/PlayVoice` 皆有 `allowAsyncLoad` 參數。若為 `true` 且 provider 支援 async，會啟動 coroutine 載入後再播放。
-
----
-
-## 第一階段播放與淡出契約
-
-- BGM、一般 Voice、循環 SFX／Voice 各自以最後一個有效請求為準。非同步、同步命中和直接傳入 AudioClip 共用取消規則。空 key／null clip 不取代現有播放。
-- 非循環 SFX 保留重疊播放能力；不同待載入音效不互相取消。`StopSfx()` 取消當時全部 SFX 待播放請求，`stopLoopOnly: true` 只影響循環分支；Voice 同樣依循環／非循環分支停止。
-- 每個聲源同時只有一個播放轉換。新的播放、Stop 或聲源 Fade 會取代舊轉換；聲源 Fade 也使該來源的舊待播放請求失效，避免載入完成後覆蓋淡出指令。
-- `FadeChannel(Master, ...)` 的非停止淡出套用全域暫時增益，涵蓋 BGM、SFX、Voice 及兩個循環聲源。它與各來源增益相乘，不修改 Mixer 中的玩家音量或 PlayerPrefs。
-- `FadeChannel(Sfx/Voice, ..., useLoopSource)` 仍只選擇指定的循環或非循環聲源，並非整類淡出。`FadeBgmTo`、`FadeSfxLoopTo`、`FadeVoiceLoopTo` 的增益持續到下一個明確 Fade 指令；新播放保留此增益。
-- `stopAfter: true` 取消當時相關待播放請求，以獨立的停止包絡淡出現有聲音，結束後恢復播放包絡。Master 停止影響全部分支；停止淡出期間接受的新播放只取代自己聲源的舊停止流程，不會讓其他舊聲音漏停。
-- BGM 轉場維持先淡出、再淡入。轉場中 Fade／Stop 可取代它，舊流程不會重新開始下一首。
-- 非循環 `PlaySfx(..., fadeInSeconds: ...)` 仍忽略淡入時長，因為 one-shot 共用聲源；獨立播放實例及單次音效淡入留待第二階段。
-- 更換 Provider 使舊 Provider 的待播放請求失效。停用 Controller 或整個 GameObject 會使舊請求／轉換失效並停止聲音；重新啟用後需重新發出播放指令。取消播放需求不會直接釋放其他需求共用的載入。
-
-第一階段驗收與本機重跑位置見 [改善計畫 §4.5](unity-audio-service-improvement-plan.md#45-第一階段實作與驗收紀錄)。
-
----
-
-## 自訂 Clip Provider
-
-1. **實作 `IAudioClipProvider` 或 `IAsyncAudioClipProvider`**  
-   - 至少要提供 `TryGetClip` 與 `GetClip`；若支援非同步，實作 `LoadClipAsync`、`IsLoading`、`IsCached`、`ReleaseClip`。
-   - 若 provider 是 `MonoBehaviour`，建議繼承後掛在常駐物件下，以免場景切換被銷毀。
-   - 可選擇實作 `IResultAudioClipProvider` 的 `LoadClipAsync(category, key, Action<AudioClip>)`，在列舉器正常完成時回報該次載入結果一次；失敗或已釋放回報 null。內建 Addressables／Fallback 已支援，避免舊等待者誤讀同 key 的新快取。原 `IAsyncAudioClipProvider` 仍可使用，Controller 只向該次原始 Provider 查詢結果。
-
-2. **註冊方式**  
-   - 透過 `AudioController.RegisterClipProvider(customProvider)` 設成全域預設。  
-   - 或使用 `AudioBootstrap`，在 Inspector `clipProviderSource` 指向自訂元件，可選擇是否同步註冊全域。
-
-3. **注意事項**  
-   - `AudioController` 會檢查 provider 是否仍存活；若來自會被卸載的場景，請確保在毀滅前主動註銷或掛在 `DontDestroyOnLoad` 階層。  
-   - 提供者若使用 Addressables，避免在 `TryGetClip` 內呼叫阻塞式 API；改由 `LoadClipAsync` 處理載入。
-
----
-
-## 自訂 Settings Handler
-
-1. **實作 `IAudioSettingsHandler`**  
-   - 提供四個音量屬性與 `UpdateVolume`，並在值變動時調用 `VolumeChanged`。
-   - 若需同步 UI，可在 handler 內部處理廣播或事件註冊。
-
-2. **掛接方式**  
-   - 將 handler `MonoBehaviour` 指派給 `AudioBootstrap.settingsHandlerSource`。  
-   - Bootstrap 會在啟動時自動呼叫 `ApplyStoredVolumesToController`（可選）與監聽 `VolumeChanged`。
-
-3. **持久化策略**  
-   - 預設 `AudioSettingsPlayerPrefs` 支援 PlayerPrefs，包含「儲存時立即 `Save`」的開關。  
-   - 若要改用雲端、設定檔等，只需換 handler 實作。
-
----
-
-## Addressables 與預載策略
-
-- `AddressablesAudioClipProvider` 預設支援：
-  - 快取：每個 key 的載入紀錄持有成功結果及唯一負責釋放的 Addressables handle。
-  - 非同步：`LoadClipAsync` 透過 coroutine 進行；`TryGetClip` 不會阻塞主執行緒。
-  - 預載：`preloadOnAwake`（預設 true）會初始化 Addressables 並遍歷可定位為 AudioClip 的 catalog key，不依賴特定 label。address／GUID 別名的統一識別與快取政策留待第二階段。
-- **建議流程**：
-  1. 在遊戲啟動或場景載入時，以 `StartCoroutine(provider.LoadClipAsync(...))` 預載常用素材。
-  2. 播放時先呼叫 `TryGetClip`；若回傳 `false` 且允許 async，再讓 `AudioController` 觸發載入。
-  3. 確認沒有播放中的使用者需要素材後，可呼叫 `ReleaseClip` 釋放。第一階段尚未提供播放持有計數，不會自動保護呼叫端主動釋放的播放中素材。
-  4. 共用載入的各等待者不自行釋放 handle；載入失敗、主動釋放或 Provider 銷毀由操作紀錄統一收尾。取消單次播放需求與主動釋放素材是不同操作。
-
----
-
-## 注意事項與最佳實務
-
-- **單例管理**：確保專案中只有一個 `AudioController`；若需多個，可考量重構為 Service Locator 或 DI。
-- **Verbose Logging**：目前 `VerboseLogging` 常數預設 `true`，整合進量產專案可視需求改為序列化欄位或直接關閉。
-- **Mixer 參數**：控制器預期 Mixer 參數名稱為 `masterVolume` / `bgmVolume` / `soundVolume` / `voiceVolume`。若使用自訂 Mixer，請維持同樣命名或更新程式碼。
-- **測試工具**：`AudioControllerDebugMenu` 適合在開發中掛載於場景物件，透過右鍵選單快速播放／清除設定。但請注意當 handler 改變 PlayerPrefs key 時需同步調整。
-- **異步流程**：`PlayByKey` 裡的 coroutine 會在 controller 上啟動；確保 controller 存在於場景且未禁用。
-- **記憶體管理**：大量預載音效會佔用記憶體；建議結合 Addressables 的分群策略或根據場景切換釋放。
-
----
-
-## 常見整合步驟範例
+1. 將 `Assets/AudioService/Runtime/Prefabs/AudioCtrl.prefab` 放入入口場景；保持一個有效 Controller。根層 Controller 會常駐，重複實例會被移除。
+2. 使用原始 `Assets/AudioService/AudioSampleScene.unity`／DebugMenu 檢查 BGM、SFX、Voice 與轉場。
+3. Prefab 的 Bootstrap 連接 Provider 與設定 handler。預設 Fallback 可以使用 Resources，或按需載入 Addressables；新建立的 Addressables provider 預設不再全量預載。
+4. 使用 `AudioController.Instance`。需要控制單次播放時取得 handle；簡單呼叫仍可使用原有 `void Play*()`。
 
 ```csharp
-public class AudioExample : MonoBehaviour
+using Controller.Audio;
+
+var audio = AudioController.Instance;
+audio.PlayBgm("ukulele_song", fadeInSeconds: 1f);
+audio.PlaySfx("minigame_win");
+
+AudioHandle voice = audio.PlayVoiceHandle("minigame_drink", new PlayOptions
 {
-    [SerializeField] private string bgmKey;
-    [SerializeField] private string sfxKey;
-
-    private void Start()
-    {
-        // 直接播放 BGM（允許非同步載入）
-        AudioController.Instance.PlayBgm(bgmKey, allowAsyncLoad: true, fadeOutSeconds: 1f, fadeInSeconds: 1f);
-    }
-
-    public void OnButtonClick()
-    {
-        AudioController.Instance.PlaySfx(sfxKey);
-    }
-
-    public void OnMasterSliderChanged(float value)
-    {
-        AudioController.Instance.SetMasterVolume(value);
-    }
-}
+    Volume = 0.8f,
+    FadeInSeconds = 0.1f
+});
+voice.Completed += h => UnityEngine.Debug.Log($"Voice ended: {h.Result}");
+voice.Pause();
+voice.Resume();
+voice.Stop(0.2f);
 ```
 
----
+## 播放 API 與 handle
 
-## 參考連結
+| 介面 | 行為 |
+| --- | --- |
+| `PlayBgm`／`PlayBgmHandle` | 共用 BGM 替換槽；最後一個有效請求優先，維持先淡出、再淡入 |
+| 舊 `PlayVoice` | 循環與非循環各自替換，保留原來的分支選擇 |
+| 舊 `PlaySfx(loop: false)` | 可並發，現在每次播放都使用獨立聲源，也支援 `fadeInSeconds` |
+| `PlaySfxHandle`／`PlayVoiceHandle` | 每次呼叫都是獨立實例，可分別停止／暫停 |
+| `Play(category, AudioId, options)` | 依音效 ID 播放獨立實例 |
+| `Play(category, AudioClip, options)` | 播放外部素材；素材由外部擁有，服務不卸載它；循環需由 options 指定 |
 
-- `Assets/AudioService/Runtime/AudioController.cs`
-- `Assets/AudioService/Runtime/AudioBootstrap.cs`
-- `Assets/AudioService/Runtime/AddressablesAudioClipProvider.cs`
-- `Assets/AudioService/Runtime/AudioSettingsPlayerPrefs.cs`
-- `Assets/AudioService/Runtime/AudioControllerDebugMenu.cs`
-- `Assets/AudioService/Runtime/Prefabs/AudioCtrl.prefab`
+服務 API 與 Provider 完成回呼須在 Unity 主執行緒使用。
 
----
+`PlayOptions` 在請求時複製，包含 Loop、Volume、Pitch、FadeInSeconds、FadeOutSeconds、IgnoreGamePause、AllowAsyncLoad、MaxInstances 與 ConcurrencyPolicy。`FadeOutSeconds` 用於 BGM 替換；停止單次播放的時長傳給 `handle.Stop(seconds)`。
 
-有任何整合或維護上的疑問，建議先檢查此文件是否涵蓋；若仍需協助，可在專案內尋找 `AudioService` 模組的聯絡負責人。祝整合順利！
+- 狀態為 Loading、Playing、Paused、Finished；結果區分 Completed、Stopped、Cancelled、Failed、Rejected。
+- Loading 中 Stop／被替換／服務關閉得到 Cancelled；播放中主動停止得到 Stopped；自然播完得到 Completed。
+- `Completed` 每個訂閱在結束時通知一次。結束後新訂閱會立即收到保留的結果；回呼拋出例外會記錄且不阻止其他訂閱。
+- 結束後 `IsValid` 為 false，控制方法回傳 false；舊 handle 無法控制池中重用的聲源，也不公開 AudioSource。
+- Loading 中 Pause 會記住暫停需求，載入完成後直接保持 Paused。暫停中的 Stop 立即完成，即使有淡出時長；暫停不會被當成自然結束。
+- 空 ID／null clip／無效分類回傳 Failed，不取代現有播放。失敗或上限拒絕不需等下一幀才可訂閱結果。
+
+## 音效目錄與來源政策
+
+`AudioId` 是區分類別、大小寫敏感的邏輯識別字。建議使用 `ui.confirm`、`music.menu` 等名稱；未設定目錄時，既有字串 key 照常使用。
+
+建立 `Assets > Create > Audio Service > Catalog` 資產，填入 Entries，並指定 Controller 的 Catalog。每筆資料包含 Id、Category、ResourcesKey、AddressablesKey、Aliases 與 MaxInstances。同一類別的別名應唯一，不同素材不要共用同一 ID。
+
+```csharp
+var catalog = UnityEngine.ScriptableObject.CreateInstance<AudioCatalog>();
+catalog.Entries = new[]
+{
+    new AudioClipAddress("ui.result", AudioCategory.Sfx)
+    {
+        ResourcesKey = "minigame_win",
+        AddressablesKey = "minigame_lose",
+        Aliases = new[] { "result" }
+    }
+};
+audio.Catalog = catalog;
+```
+
+Fallback 有兩個明確政策：
+
+- `PreferAvailable`（預設）：先使用主來源已駐留的素材；其次使用備援已駐留素材或同步 Resources；仍無素材才載入主來源，失敗後再嘗試備援。
+- `PrimaryThenBackup`：等待主來源結果，失敗才使用備援，不因備援已快取而提前取代主來源。
+
+改變 Fallback 的 Policy／Configure 會通知服務，取消舊待播放請求並建立新快取世代；已播放的舊素材保留到播放結束。更換 Catalog 也會刷新；直接修改同一 Catalog 的 Entries 後，呼叫 `RefreshClipProvider()` 使舊解析快取失效。
+
+`TryGetCachedClip` 是純快取查詢，不發起載入。Resources 的舊 `TryGetClip` 仍可能同步載入。`AllowAsyncLoad=false` 不等待進行中的載入：Resources 可同步取得，Addressables 只使用已駐留素材，且取得獨立持有權。
+
+## 素材持有、預載與釋放
+
+服務區分載入等待者、播放使用者、普通快取與預載群組。共用同一邏輯 ID 的請求只載入一次；取消某個等待者不取消其他等待者。Addressables 另外依實際位置合併 address／GUID 別名，使取得／釋放成對。
+
+```csharp
+audio.Preload(AudioCategory.Sfx, "ui.result", "level-1", loaded =>
+    UnityEngine.Debug.Log($"Preload: {loaded}"));
+
+// 離開用途群組時移除該群組的保留需求。
+audio.ReleaseGroup("level-1");
+// 普通播放建立的快取另由此方法標記釋放；仍在使用者結束後才實際歸還。
+audio.ReleaseUnusedClips();
+```
+
+- `ReleaseGroup` 取消該群組尚未完成的預載，移除群組保留；不會停止使用中的聲音，也不清除其他群組／普通快取的保留。
+- `ReleaseUnusedClips` 清除普通快取保留；有播放使用者或群組保留時，素材持續有效。
+- 原始 `ReleaseClip` 不會使內建 Provider 的有效 lease 提前失效。Provider 更換／銷毀後，已取得的播放 lease 仍保持到最後使用者離開。
+- Resources 在最後 lease／快取保留離開後移除自身引用，不強制 `UnloadAsset`，避免傷及外部持有者；實際 native 記憶體回收依 Unity 的未使用資產清理。
+- 直接傳入的 AudioClip 不納入 Provider 的卸載責任。不要由外部主動銷毀仍在播放的 clip。
+- 舊的全量預載旗標仍可明確開啟，但預設使用按需載入與上述指定群組預載。尚未加入 LRU／記憶體預算淘汰。
+
+## 並發、聲源池與暫停
+
+`MaxVoices=0` 表示不設服務上限，避免任意替專案決定預算。可設定服務總上限，及 PlayOptions／Catalog 的單音效上限。計數包含 Loading 中的預約；單音效的限制以分類＋解析後 ID 計算。
+
+```csharp
+audio.MaxVoices = 24; // 範例值，請依自己的場景量測。
+audio.ConcurrencyPolicy = AudioConcurrencyPolicy.StealOldest;
+var handle = audio.PlaySfxHandle("ui.result", new PlayOptions
+{
+    MaxInstances = 2,
+    ConcurrencyPolicy = AudioConcurrencyPolicy.RejectNew,
+    IgnoreGamePause = true
+});
+```
+
+超過上限可回傳 Rejected 或停止最舊實例。聲源歸還時清除 clip、pitch、loop、Mixer、暫停標記、播放包絡與轉換。池降低重複建立的成本；同時混音的數量仍由並發政策與 Unity AudioSettings 分別決定。
+
+- `SetGamePaused(true)` 暫停一般播放；`IgnoreGamePause=true` 的 UI 聲音略過此原因。
+- 個別 `handle.Pause()` 的原因獨立保存，解除遊戲暫停不會擅自恢復個別暫停。
+- `SetBackgroundPaused`／預設啟用的 `pauseOnBackground` 適用全部播放，包括 UI。
+- `SetMuted(channel, true)` 只抑制輸出，不停播、不改 PlayerPrefs；`Time.timeScale=0` 本身不等於音訊暫停，遊戲需明確呼叫服務。
+
+## 音量與設定
+
+最終音量由玩家 Master／分類設定、暫時 Master／分類增益、舊 API 分支增益、單次播放音量與播放包絡組成。Mixer 可用時玩家設定由 Mixer 套用；`SetMixer(null)` 明確使用無 Mixer 模式，由來源計算相同音量。預設會尋找 `Resources/Audio/MasterMixer`。
+
+- Mixer 群組為 BGM／Sound／Voice，exposed parameter 為 `masterVolume`／`bgmVolume`／`soundVolume`／`voiceVolume`。`ValidateMixer()` 與 `LastMixerIssue` 提供基本診斷；缺失的路由／參數使用來源增益備援。
+- `SetMasterVolume`／`SetBgmVolume`／`SetSfxVolume`／`SetVoiceVolume` 經已綁定 handler 同步儲存與事件。Bootstrap 的 `ApplyVolume(..., persist:false)` 可暫時調整而不寫回設定。
+- `FadeBus` 涵蓋該分類所有新舊實例；`FadeChannel(Sfx/Voice, ..., useLoopSource)` 保留舊 API 的循環／非循環分支，只影響經舊入口建立的聲音。
+- `FadeChannel(Master)`／`FadeBus(Master)` 涵蓋全部分類。停止淡出只作用於呼叫當時的播放，後續新播放不受舊停止流程控制。
+- 非停止淡出的分類／分支增益持續有效。停止或重播只重設播放包絡，不覆寫玩家設定，也不清除刻意設定的分類衰減。
+- `AudioSettingsPlayerPrefs.ResetSettings()` 刪除實際配置的 key，重載記憶體預設值，並廣播四個音量；DebugMenu 使用此入口。
+- **儲存相容性調整**：原 `saveImmediately=true` 現在表示自動延後合併儲存，預設閒置 0.25 秒後 `Save`，避免每次滑桿變動都同步寫磁碟。可明確 `Flush()`；停用或進入背景亦會 Flush。
+- API 音量 clamp 到 0～1；NaN／Infinity 取 0。損壞的已存音量使用正規化預設值。時長負值／非有限值取 0；pitch clamp 到 0.01～3，非有限值取 1；dB 最低 -80。
+
+## 生命週期與自訂 Provider
+
+Controller 提供 `Initialize()`、`Ready`、`Shutdown()`。停用元件或 GameObject 會停止播放、取消舊載入需求並解除訂閱；重新啟用會重新初始化，需重新發出播放。重複 Prefab、一般／additive 場景及關閉 Domain Reload 的重入已有本機測試。
+
+Bootstrap 以自身作為全域 Provider 註冊擁有者；舊擁有者退訂不會清除後來的註冊。自訂整合可使用 `RegisterClipProvider(provider, owner)`／`UnregisterClipProvider(owner)`。
+
+既有 `IAudioClipProvider`、`IAsyncAudioClipProvider`、`IResultAudioClipProvider` 均保留。需要明確安全持有時，建議實作：
+
+| 附加介面 | 契約 |
+| --- | --- |
+| `IAudioClipCache` | `TryGetCachedClip` 不觸發載入 |
+| `IAudioClipLeaseProvider` | `AcquireClip(address, callback)` 正常完成恰好回呼一次；失敗 null；成功 lease 到 Dispose 前保持素材有效 |
+| `IAudioSynchronousClipProvider` | 明確的同步取得，回傳 lease；不能偷偷等待非同步結果 |
+| `IAudioClipProviderChanges` | Provider 政策／映射變更時發送 Changed，使服務取消舊需求及更新快取世代 |
+
+舊 Provider 的 coroutine／巢狀 enumerator 例外會轉為載入失敗。未提供 lease 契約的外部 Provider，仍需自己協調服務以外的使用者與 ReleaseClip，服務無法替未知外部持有者計數。正式程式不引用本機測試或工具。
+
+## 診斷與驗證
+
+`Diagnostics` 提供 Playing、Paused、Loading、PooledSources、CreatedSources、CachedClips、ClipUsers、PendingLoads 與 LastFailure。快取統計指目前 Provider 世代的服務快取；切換後仍在播放的舊 lease 會保持有效，但不列入新世代快取統計。`verboseLogging` 可開關額外日誌。
+
+驗收摘要見 [改善計畫 §5.4](unity-audio-service-improvement-plan.md#54-第二階段實作與驗收紀錄)，相容性變更見 [CHANGELOG](CHANGELOG.md)。本機測試位於受忽略的 `Assets/AudioService/Tests/`；重跑工具在 `Tools/AudioService/`，XML／Profiler 操作紀錄在 `work/stage-two/`，均不隨 Git 發布。

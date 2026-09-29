@@ -3,107 +3,66 @@ using UnityEngine;
 
 namespace Controller.Audio
 {
-    /// <summary>
-    /// Simple PlayerPrefs-backed implementation of <see cref="IAudioSettingsHandler"/>.
-    /// </summary>
-    [DisallowMultipleComponent]
-    public class AudioSettingsPlayerPrefs : MonoBehaviour, IAudioSettingsHandler
+    public interface IAudioSettingsMaintenance
     {
-        private const float Epsilon = 0.0001f;
-
-        [Header("PlayerPrefs Keys")]
+        void BroadcastStoredVolumes();
+        void ResetSettings();
+        void Flush();
+    }
+    [DisallowMultipleComponent]
+    public class AudioSettingsPlayerPrefs : MonoBehaviour, IAudioSettingsHandler, IAudioSettingsMaintenance
+    {
         [SerializeField] private string masterKey = "Audio.Master";
         [SerializeField] private string bgmKey = "Audio.Bgm";
         [SerializeField] private string sfxKey = "Audio.Sfx";
         [SerializeField] private string voiceKey = "Audio.Voice";
-
-        [Header("Default Volumes")]
-        [Range(0f, 1f)] [SerializeField] private float defaultMaster = 1f;
-        [Range(0f, 1f)] [SerializeField] private float defaultBgm = 1f;
-        [Range(0f, 1f)] [SerializeField] private float defaultSfx = 1f;
-        [Range(0f, 1f)] [SerializeField] private float defaultVoice = 1f;
-
-        [Header("Persistence")]
-        [SerializeField] private bool saveImmediately = false;
-
-        private float _master;
-        private float _bgm;
-        private float _sfx;
-        private float _voice;
-
+        [Range(0, 1)] [SerializeField] private float defaultMaster = 1;
+        [Range(0, 1)] [SerializeField] private float defaultBgm = 1;
+        [Range(0, 1)] [SerializeField] private float defaultSfx = 1;
+        [Range(0, 1)] [SerializeField] private float defaultVoice = 1;
+        [Tooltip("Automatically flush after the slider has been idle for saveDelaySeconds.")]
+        [SerializeField] private bool saveImmediately;
+        [SerializeField] private float saveDelaySeconds = .25f;
+        private readonly float[] values = new float[4];
+        private bool loaded, dirty;
+        private float flushAt;
         public event Action<AudioChannel, float> VolumeChanged;
-
-        public float MasterVolume => _master;
-        public float BgmVolume => _bgm;
-        public float SfxVolume => _sfx;
-        public float VoiceVolume => _voice;
-
-        private void Awake()
+        public float MasterVolume { get { EnsureLoaded(); return values[0]; } }
+        public float BgmVolume { get { EnsureLoaded(); return values[1]; } }
+        public float SfxVolume { get { EnsureLoaded(); return values[2]; } }
+        public float VoiceVolume { get { EnsureLoaded(); return values[3]; } }
+        public int SaveCount { get; private set; }
+        private string[] Keys => new[] { masterKey, bgmKey, sfxKey, voiceKey };
+        private float[] Defaults => new[] { defaultMaster, defaultBgm, defaultSfx, defaultVoice };
+        private void Awake() => EnsureLoaded();
+        private void EnsureLoaded() { if (!loaded) Reload(); }
+        public void Reload()
         {
-            LoadFromPrefs();
+            var keys = Keys; var defaults = Defaults;
+            for (int i = 0; i < 4; i++) values[i] = AudioValues.Unit(PlayerPrefs.GetFloat(keys[i], AudioValues.Unit(defaults[i], 1)), AudioValues.Unit(defaults[i], 1));
+            loaded = true;
         }
-
-        private void LoadFromPrefs()
-        {
-            _master = PlayerPrefs.GetFloat(masterKey, Mathf.Clamp01(defaultMaster));
-            _bgm = PlayerPrefs.GetFloat(bgmKey, Mathf.Clamp01(defaultBgm));
-            _sfx = PlayerPrefs.GetFloat(sfxKey, Mathf.Clamp01(defaultSfx));
-            _voice = PlayerPrefs.GetFloat(voiceKey, Mathf.Clamp01(defaultVoice));
-        }
-
         public void UpdateVolume(AudioChannel channel, float normalizedVolume)
         {
-            var clamped = Mathf.Clamp01(normalizedVolume);
-
-            switch (channel)
-            {
-                case AudioChannel.Master:
-                    if (!ShouldChange(_master, clamped)) return;
-                    _master = clamped;
-                    PlayerPrefs.SetFloat(masterKey, _master);
-                    break;
-                case AudioChannel.Bgm:
-                    if (!ShouldChange(_bgm, clamped)) return;
-                    _bgm = clamped;
-                    PlayerPrefs.SetFloat(bgmKey, _bgm);
-                    break;
-                case AudioChannel.Sfx:
-                    if (!ShouldChange(_sfx, clamped)) return;
-                    _sfx = clamped;
-                    PlayerPrefs.SetFloat(sfxKey, _sfx);
-                    break;
-                case AudioChannel.Voice:
-                    if (!ShouldChange(_voice, clamped)) return;
-                    _voice = clamped;
-                    PlayerPrefs.SetFloat(voiceKey, _voice);
-                    break;
-                default:
-                    Debug.LogWarning($"[AudioSettingsPlayerPrefs] Unknown channel {channel}");
-                    return;
-            }
-
-            if (saveImmediately)
-            {
-                PlayerPrefs.Save();
-            }
-
-            VolumeChanged?.Invoke(channel, clamped);
+            EnsureLoaded(); int index = (int)channel; if (index < 0 || index > 3) return;
+            var value = AudioValues.Unit(normalizedVolume);
+            if (values[index] == value) return;
+            values[index] = value; PlayerPrefs.SetFloat(Keys[index], value);
+            MarkDirty(); VolumeChanged?.Invoke(channel, value);
         }
-
-        private static bool ShouldChange(float current, float incoming)
+        private void MarkDirty() { dirty = true; flushAt = Time.realtimeSinceStartup + AudioValues.Seconds(saveDelaySeconds); }
+        private void Update() { if (dirty && saveImmediately && Time.realtimeSinceStartup >= flushAt) Flush(); }
+        public void Flush() { if (!dirty) return; PlayerPrefs.Save(); dirty = false; SaveCount++; }
+        private void OnDisable() => Flush();
+        private void OnApplicationPause(bool paused) { if (paused) Flush(); }
+        public void ResetSettings()
         {
-            return Mathf.Abs(current - incoming) > Epsilon;
+            foreach (var key in Keys) PlayerPrefs.DeleteKey(key);
+            loaded = false; EnsureLoaded(); MarkDirty(); BroadcastStoredVolumes();
         }
-
-        /// <summary>
-        /// Emits current values through <see cref="VolumeChanged"/>. Useful when wiring listeners after Awake.
-        /// </summary>
         public void BroadcastStoredVolumes()
         {
-            VolumeChanged?.Invoke(AudioChannel.Master, _master);
-            VolumeChanged?.Invoke(AudioChannel.Bgm, _bgm);
-            VolumeChanged?.Invoke(AudioChannel.Sfx, _sfx);
-            VolumeChanged?.Invoke(AudioChannel.Voice, _voice);
+            EnsureLoaded(); for (int i = 0; i < 4; i++) VolumeChanged?.Invoke((AudioChannel)i, values[i]);
         }
     }
 }

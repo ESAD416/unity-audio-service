@@ -2,9 +2,9 @@
 
 文件日期：2026-09-29
 
-文件版本：1.4
+文件版本：1.5
 
-狀態：第一階段 R1～R6 實作及本機驗收完成；第二、第三階段尚未開始
+狀態：第一階段 R1～R6、第二階段 C1～C7 實作及本機 Editor 驗收完成；第三階段尚未開始
 
 本文件整合專案審查、三階段改善目標，以及三個開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。
 
@@ -253,17 +253,47 @@ Fallback 的主／備 Provider 以介面持有，也須檢查其 Unity 物件是
 
 舊的 `void Play*()` 保留為方便入口，內部轉交新核心。需要 handle 的呼叫使用新增 API，避免直接改動舊方法回傳型別造成相容性問題。若 Provider 需要新增持有能力，優先評估附加介面或 adapter，並提供遷移範例。
 
-- [ ] 兩個相同素材的播放可分別停止，彼此不干擾。
-- [ ] 暫停不被誤判成播放完成並回收。
-- [ ] 舊 handle 無法控制已被重用的聲源。
-- [ ] 播放完成、停止、取消與載入失敗可被上層正確區分。
-- [ ] 共用素材仍有使用者時保持有效；最後持有者離開後依政策釋放。
-- [ ] 超過聲音上限時有可預期且可診斷的結果。
-- [ ] 音量、靜音、重設與重新初始化後的設定一致。
-- [ ] Provider 更換與服務關閉後，舊結果不會重新作用。
-- [ ] 不同素材別名不造成失配釋放；無效輸入與已損壞設定值有明確結果。
-- [ ] 新增的分類淡出涵蓋該分類所有實例，舊聲源選擇 API 維持原有範圍。
-- [ ] 第一階段回歸測試持續通過。
+- [x] 兩個相同素材的播放可分別停止，彼此不干擾。
+- [x] 暫停不被誤判成播放完成並回收。
+- [x] 舊 handle 無法控制已被重用的聲源。
+- [x] 播放完成、停止、取消與載入失敗可被上層正確區分。
+- [x] 共用素材仍有使用者時保持有效；最後持有者離開後依政策釋放。
+- [x] 超過聲音上限時有可預期且可診斷的結果。
+- [x] 音量、靜音、重設與重新初始化後的設定一致。
+- [x] Provider 更換與服務關閉後，舊結果不會重新作用。
+- [x] 不同素材別名不造成失配釋放；無效輸入與已損壞設定值有明確結果。
+- [x] 新增的分類淡出涵蓋該分類所有實例，舊聲源選擇 API 維持原有範圍。
+- [x] 第一階段回歸測試持續通過。
+
+### 5.4 第二階段實作與驗收紀錄
+
+實作日期：2026-09-29。以第一階段本機提交 `97567cd` 為基準，在 `improvement/stage-two-core` 完成。以下是第二階段實際結果；第 4.5 節保留第一階段當時的驗收快照。
+
+| 項目 | 實作結果與決策 |
+| --- | --- |
+| C1 | 新增 `AudioHandle`、`PlayOptions`、`AudioId`；保留舊 void 播放簽名並轉交 `AudioPlaybackEngine`。單次播放可停止／暫停／恢復，結果區分完成、停止、載入取消、失敗與上限拒絕。每個完成訂閱通知一次，晚訂閱立即收到既有結果；結束 handle 不再持有控制權 |
+| C2 | `AudioCatalog` 依分類＋大小寫敏感 ID 映射 Resources／Addressables key 與別名。`IAudioClipCache` 純查快取；`IAudioSynchronousClipProvider` 明確同步取得 lease。Fallback 預設 PreferAvailable，也支援 PrimaryThenBackup；變更政策／Provider／Catalog 取消舊待播放並刷新快取世代 |
+| C3 | `AudioClipStore` 分開載入等待者、播放子 lease、普通快取保留與預載群組；提供 Preload／ReleaseGroup／ReleaseUnusedClips。Addressables 依 resource location 合併 address／GUID 的 native operation，所有權成對釋放。舊播放可持有跨 Provider 更換的 lease；外部 clip 不卸載。Resources 只移除自身引用，不強制卸載可能仍被外部持有的資產 |
+| C4 | 保留 5 個相容用聲源，其餘獨立 emitter 進池重用；非循環 SFX 現在支援單次淡入。全域／單音效上限計入 Loading 預約，支援 RejectNew／StealOldest。尚無專案預算資料，預設 0 表示不限，不任意宣告適用於所有平台的數量 |
+| C5 | 玩家音量、分類／分支增益與播放包絡分離；FadeBus 涵蓋所有分類實例，舊 FadeChannel 保留分支範圍。個別、遊戲、背景暫停各自保存；UI 可略過遊戲暫停。設定延後合併 Save，Flush／停用／背景時保存；Reset 使用實際 key 並重載記憶體及廣播。數值、損壞 Prefs、極小 dB 有明確正規化 |
+| C6 | Initialize／Ready／Shutdown、Provider 註冊所有權、停用退訂與重新啟用、重複 Prefab 防護、靜態重設及 Bootstrap 重接。Fallback 檢查內層 Unity Provider 存活；舊 coroutine 例外轉成失敗，遲到 lease 安全歸還 |
+| C7 | 驗證 Mixer 群組與 exposed parameter，缺失時以來源增益備援；明確 SetMixer(null) 可禁用預設 Mixer。提供播放／暫停／待載入／聲源池／快取統計與 LastFailure／LastMixerIssue，詳細日誌可關閉 |
+
+本階段自行實作所需核心，沿用第 7 節的設計參考，未複製第三方程式碼。3D、DSP 排程、完整編輯器音效庫、LRU／記憶體預算策略未加入。
+
+**自動驗證：** Unity `6000.6.3f1`、Addressables `2.11.2`、Test Framework `1.8.0`。最終本機 PlayMode **92／92 通過**，其中保留第一階段全部 39 項回歸。另有 **2 項 EditMode 生命週期情境通過**：關閉 Domain Reload、同時關閉 Domain／Scene Reload，各反覆進出 Play Mode；XML 含 Test Framework 的 RequiredTest，總數為 3／3。
+
+覆蓋單次控制、終態／晚訂閱、池重用、預約上限、暫停與自然結束、預載共享／取消／回呼重入、Provider 切換與關閉、別名及實際 Addressables 持有／失敗／重試、Resources 同步路徑、巢狀 Provider 失效、設定與 Mixer 備援、原場景／additive 重複 Prefab、場景卸載、元件與 GameObject 停用／重啟。實際 Addressables 素材仍使用 Editor 資產模式。
+
+**Editor 操作及 Profiler 紀錄：** 在原範例場景，兩次相同素材可各自停止；暫停第二個時輸出降至 0，恢復後重新測得非零音訊輸出，未誤回收。24 個循環 SFX 同播時共建立 29 個聲源（含 5 個相容用聲源），停止後池內 24 個；第二輪再播放 24 個，建立總數仍為 29。分類淡出作用於全部實例；Stop／ReleaseUnused 後快取與使用數回到 0。
+
+`ProfilerRecorder` 的 `AudioService.StageTwo.Burst` 標記有效，操作期間記錄到的最大耗時為 4,339,625 ns（約 4.340 ms）。這是單次本機 Editor 基準，包含初次建立／快取與 Editor 成本，不能視為暖池單次成本、平台效能保證、改善百分比或零 GC 證據。
+
+**本機重跑資料：** `Assets/AudioService/Tests/`、`Tools/AudioService/run-stage-two.sh`、`Tools/AudioService/STAGE-TWO.md`、`work/stage-two/final-playmode.xml`、`work/stage-two/lifecycle.xml`、`work/stage-two/manual-playback.txt`。測試、工具與結果皆依既定規則受 Git 忽略；正式 runtime 不依賴它們。尚未刪除本機驗證資料。
+
+Unity 自動重新序列化的 `ProjectSettings.asset`／`EditorSettings.asset` 已回復至開工基準，不納入功能提交。README 與 CHANGELOG 記錄新 API、舊 API 範圍、按需載入、lease 遷移及自動儲存改為合併延後的相容性影響。
+
+**尚未驗證／交付：** Addressables content build、Player 建置與實機播放、其他 Unity 版本／平台、長時間壓測及資源預算門檻。UPM 核心／可選依賴分離、發布 CI、授權盤點仍為第三階段。未推送遠端、建立 PR 或發布版本。
 
 ## 6. 第三階段：對外套件
 
@@ -295,7 +325,7 @@ Addressables 整合獨立成 adapter 套件／assembly，隔離全部相關引�
 
 ### 6.3 相容性、本機測試與 CI 建置
 
-目前專案已升級至 Unity `6000.6.3f1`，後續先在此環境補齊播放與建置基準。原始審查版本 `6000.2.6f2` 保留作歷史比較；兩處 API 修正已通過新版 Editor 重新編譯，但尚未完成 PlayMode、Addressables content build 或 Player 驗證，不能視為完整相容性驗收。Unity 2022／2021 等其他版本只有在實際通過編譯與測試後，才列為已驗證支援。
+目前專案已升級至 Unity `6000.6.3f1`，後續先在此環境補齊播放與建置基準。原始審查版本 `6000.2.6f2` 保留作歷史比較；兩處 API 修正及第一、第二階段 PlayMode 已通過；Addressables content build 與 Player 尚未驗證，不能視為完整部署相容性驗收。Unity 2022／2021 等其他版本只有在實際通過編譯與測試後，才列為已驗證支援。
 
 EditMode／PlayMode 回歸測試在本機執行，詳細結果放在受忽略的 work 目錄，摘要回填本文件。由於測試與輔助腳本不隨 Git 提供，遠端 CI 僅規劃使用已追蹤內容執行套件匯入／編譯與適當的範例建置，不引用本機測試或 Tools 腳本。Unity 授權與執行環境設定納入落地工作；本文件不預設相關憑證已備妥。
 
@@ -429,7 +459,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] Unity 播放基準執行與缺陷重現（21 項基準中 18 項失敗，見 4.5）。
 - [ ] 升級後 Addressables content build 與 Player 建置／播放驗證。
 - [x] 第一階段實作與驗收（最終 39／39 PlayMode 測試及 Editor 原場景播放檢查通過，見 4.5）。
-- [ ] 第二階段實作與驗收。
+- [x] 第二階段 C1～C7 實作與本機 Editor 驗收（92／92 PlayMode、2 項 Play Mode 重入情境及原場景操作／聲源池基準通過，見 5.4）。
 - [ ] 第三階段實作與驗收。
 
 ## 12. 原專案與 Unity 技術依據
@@ -453,3 +483,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.2 | 2026-09-28 | 正式測試與輔助腳本改為本機保留、Git 忽略、完工可移除；一併忽略 work 與測試資料夾的 Unity .meta；調整套件／CI 範圍，補上移除後仍可獨立運作的驗收。未刪除資料、未實作播放功能 |
 | 1.3 | 2026-09-29 | 記錄 Unity `6000.6.3f1` 升級後的目前套件版本、兩處 FindAnyObjectByType 修正及 Editor 編譯／Console 驗證；更新工作狀態與後續驗證基準，保留原始審查快照，明列播放、建置與多實例情境尚未驗證 |
 | 1.4 | 2026-09-29 | 完成第一階段 R1～R6、39 項本機回歸與 Editor 原場景播放檢查；記錄結果回傳的可選 Provider 介面、來源／Master 增益及停用語意；更新驗收與仍未驗證範圍 |
+| 1.5 | 2026-09-29 | 完成第二階段 C1～C7：handle、目錄、素材 lease、聲源池、設定／暫停與生命週期；92 項 PlayMode 與 2 項重入情境通過，記錄 Editor 操作、29 聲源重用及 Profiler 基準，明列相容性變更與第三階段界線 |
