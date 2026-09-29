@@ -16,9 +16,9 @@
 
 ## 系統需求與相容性
 
-- **Unity 版本**：建議 Unity 2022.2 以上；若需支援 Unity 2021 LTS，可將 `AudioBootstrap` 等使用 `FindFirstObjectByType` 的地方改為 `FindObjectOfType`，或加上條件編譯。
-- **腳本執行階段**：所有腳本在 `Assembly-CSharp`；若搬移到自訂 Assembly Definition，請確保新的 Assembly 可以存取 Unity 基礎 API 以及任何外部套件（例如 Addressables）。
-- **套件依賴**：非必要；僅 Addressables 提供者需 Unity Addressables Package。
+- **目前驗證環境**：Unity `6000.6.3f1`、Addressables `2.11.2`、Unity Test Framework `1.8.0`。第一階段已完成 Editor／PlayMode 播放驗證；Player 建置、Addressables content build 與其他 Unity 版本尚未驗證。
+- **腳本 assembly**：Runtime 使用 `Controller.Audio.asmdef`，明確引用 `Unity.Addressables` 與 `Unity.ResourceManager`；現有腳本 GUID 保留。原始場景與 Prefab 已通過播放及引用檢查。
+- **目前依賴**：此階段需安裝 Addressables。將核心與 Addressables adapter 分離、提供完全無 Addressables 的安裝方式，屬第三階段工作。
 
 ---
 
@@ -46,11 +46,28 @@
 
 ---
 
+## 第一階段播放與淡出契約
+
+- BGM、一般 Voice、循環 SFX／Voice 各自以最後一個有效請求為準。非同步、同步命中和直接傳入 AudioClip 共用取消規則。空 key／null clip 不取代現有播放。
+- 非循環 SFX 保留重疊播放能力；不同待載入音效不互相取消。`StopSfx()` 取消當時全部 SFX 待播放請求，`stopLoopOnly: true` 只影響循環分支；Voice 同樣依循環／非循環分支停止。
+- 每個聲源同時只有一個播放轉換。新的播放、Stop 或聲源 Fade 會取代舊轉換；聲源 Fade 也使該來源的舊待播放請求失效，避免載入完成後覆蓋淡出指令。
+- `FadeChannel(Master, ...)` 的非停止淡出套用全域暫時增益，涵蓋 BGM、SFX、Voice 及兩個循環聲源。它與各來源增益相乘，不修改 Mixer 中的玩家音量或 PlayerPrefs。
+- `FadeChannel(Sfx/Voice, ..., useLoopSource)` 仍只選擇指定的循環或非循環聲源，並非整類淡出。`FadeBgmTo`、`FadeSfxLoopTo`、`FadeVoiceLoopTo` 的增益持續到下一個明確 Fade 指令；新播放保留此增益。
+- `stopAfter: true` 取消當時相關待播放請求，以獨立的停止包絡淡出現有聲音，結束後恢復播放包絡。Master 停止影響全部分支；停止淡出期間接受的新播放只取代自己聲源的舊停止流程，不會讓其他舊聲音漏停。
+- BGM 轉場維持先淡出、再淡入。轉場中 Fade／Stop 可取代它，舊流程不會重新開始下一首。
+- 非循環 `PlaySfx(..., fadeInSeconds: ...)` 仍忽略淡入時長，因為 one-shot 共用聲源；獨立播放實例及單次音效淡入留待第二階段。
+- 更換 Provider 使舊 Provider 的待播放請求失效。停用 Controller 或整個 GameObject 會使舊請求／轉換失效並停止聲音；重新啟用後需重新發出播放指令。取消播放需求不會直接釋放其他需求共用的載入。
+
+第一階段驗收與本機重跑位置見 [改善計畫 §4.5](unity-audio-service-improvement-plan.md#45-第一階段實作與驗收紀錄)。
+
+---
+
 ## 自訂 Clip Provider
 
 1. **實作 `IAudioClipProvider` 或 `IAsyncAudioClipProvider`**  
    - 至少要提供 `TryGetClip` 與 `GetClip`；若支援非同步，實作 `LoadClipAsync`、`IsLoading`、`IsCached`、`ReleaseClip`。
    - 若 provider 是 `MonoBehaviour`，建議繼承後掛在常駐物件下，以免場景切換被銷毀。
+   - 可選擇實作 `IResultAudioClipProvider` 的 `LoadClipAsync(category, key, Action<AudioClip>)`，在列舉器正常完成時回報該次載入結果一次；失敗或已釋放回報 null。內建 Addressables／Fallback 已支援，避免舊等待者誤讀同 key 的新快取。原 `IAsyncAudioClipProvider` 仍可使用，Controller 只向該次原始 Provider 查詢結果。
 
 2. **註冊方式**  
    - 透過 `AudioController.RegisterClipProvider(customProvider)` 設成全域預設。  
@@ -81,13 +98,14 @@
 ## Addressables 與預載策略
 
 - `AddressablesAudioClipProvider` 預設支援：
-  - 快取：使用 `_cache` 儲存成功載入的 `AudioClip`。
+  - 快取：每個 key 的載入紀錄持有成功結果及唯一負責釋放的 Addressables handle。
   - 非同步：`LoadClipAsync` 透過 coroutine 進行；`TryGetClip` 不會阻塞主執行緒。
-  - 預載：`preloadOnAwake`（預設 true）會初始化 Addressables 並嘗試載入所有標註為 `AudioClip` 的資源。
+  - 預載：`preloadOnAwake`（預設 true）會初始化 Addressables 並遍歷可定位為 AudioClip 的 catalog key，不依賴特定 label。address／GUID 別名的統一識別與快取政策留待第二階段。
 - **建議流程**：
   1. 在遊戲啟動或場景載入時，以 `StartCoroutine(provider.LoadClipAsync(...))` 預載常用素材。
   2. 播放時先呼叫 `TryGetClip`；若回傳 `false` 且允許 async，再讓 `AudioController` 觸發載入。
-  3. 不再需要的音效可呼叫 `ReleaseClip` 釋放 handle。
+  3. 確認沒有播放中的使用者需要素材後，可呼叫 `ReleaseClip` 釋放。第一階段尚未提供播放持有計數，不會自動保護呼叫端主動釋放的播放中素材。
+  4. 共用載入的各等待者不自行釋放 handle；載入失敗、主動釋放或 Provider 銷毀由操作紀錄統一收尾。取消單次播放需求與主動釋放素材是不同操作。
 
 ---
 

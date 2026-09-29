@@ -32,8 +32,23 @@ namespace Controller.Audio
         // Dedicated looping Voice source (like Sound_Loop)
         private AudioSource _voiceLoopSource;
 
-        private readonly Dictionary<AudioSource, Coroutine> _activeFades = new();
-        private Coroutine _bgmTransitionCoroutine;
+        // Request epochs are separate from transition versions: concurrent one-shots
+        // share a cancellation epoch without invalidating each other's completion.
+        private sealed class SourceState
+        {
+            public long RequestVersion;
+            public long TransitionVersion;
+            public Coroutine Transition;
+            public float Gain = 1f;
+            public float Envelope = 1f;
+        }
+
+        private readonly Dictionary<AudioSource, SourceState> _states = new();
+        private long _providerVersion;
+        private long _serviceVersion;
+        private float _masterGain = 1f;
+        private long _masterVersion;
+        private Coroutine _masterFade;
 
         private static IAudioClipProvider _globalClipProvider;
         private static bool _globalClipProviderIsUnityObject;
@@ -55,6 +70,7 @@ namespace Controller.Audio
 
         public void SetClipProvider(IAudioClipProvider provider)
         {
+            if (!ReferenceEquals(_clipProvider, provider)) _providerVersion++;
             _clipProvider = provider;
             if (provider is UnityEngine.Object unityObject)
             {
@@ -99,6 +115,7 @@ namespace Controller.Audio
 
         private void ClearClipProvider()
         {
+            _providerVersion++;
             _clipProvider = null;
             _clipProviderIsUnityObject = false;
             _clipProviderUnityRef = null;
@@ -111,6 +128,7 @@ namespace Controller.Audio
                 return false;
             }
 
+            _providerVersion++;
             _clipProvider = _globalClipProvider;
             _clipProviderIsUnityObject = _globalClipProviderIsUnityObject;
             _clipProviderUnityRef = _globalClipProviderUnityRef;
@@ -267,6 +285,7 @@ namespace Controller.Audio
             _voiceSource = EnsureAudioSource("Voice", false, _voiceGroup);
             _voiceLoopSource = EnsureAudioSource("Voice_Loop", true, _voiceGroup);
 
+            foreach (var source in AllSources()) { State(source); ApplyGain(source); }
             if (VerboseLogging) Debug.Log("[AudioController] AudioSources ready");
         }
 
@@ -302,507 +321,380 @@ namespace Controller.Audio
             return source;
         }
 
-        #region Fade Helpers
+        #endregion
 
-        private void StopFade(AudioSource source)
+        #region Playback and transitions
+
+        private SourceState State(AudioSource source)
+        {
+            if (!_states.TryGetValue(source, out var state))
+            {
+                state = new SourceState();
+                _states.Add(source, state);
+            }
+            return state;
+        }
+
+        private void ApplyGain(AudioSource source)
         {
             if (source == null) return;
-            if (_activeFades.TryGetValue(source, out var routine) && routine != null)
-            {
-                StopCoroutine(routine);
-            }
-            _activeFades.Remove(source);
+            var state = State(source);
+            source.volume = Mathf.Clamp01(_masterGain * state.Gain * state.Envelope);
         }
 
-        private void FadeSource(AudioSource source, float targetVolume, float seconds, bool stopAfter = false, bool clearClip = false)
+        private void ApplyAllGains()
+        {
+            foreach (var pair in _states) ApplyGain(pair.Key);
+        }
+
+        private void CancelTransition(AudioSource source)
         {
             if (source == null) return;
-
-            targetVolume = Mathf.Clamp01(targetVolume);
-            if (seconds <= 0f)
-            {
-                StopFade(source);
-                source.volume = targetVolume;
-                if (stopAfter)
-                {
-                    source.Stop();
-                    if (clearClip)
-                    {
-                        source.clip = null;
-                    }
-                }
-                return;
-            }
-
-            StopFade(source);
-            var routine = StartCoroutine(FadeAndFinalizeRoutine(source, targetVolume, seconds, stopAfter, clearClip));
-            _activeFades[source] = routine;
+            var state = State(source);
+            state.TransitionVersion++;
+            if (state.Transition != null) StopCoroutine(state.Transition);
+            state.Transition = null;
         }
 
-        private IEnumerator FadeAndFinalizeRoutine(AudioSource source, float targetVolume, float seconds, bool stopAfter, bool clearClip)
+        private bool TransitionIsCurrent(AudioSource source, long version) =>
+            this != null && isActiveAndEnabled && source != null && State(source).TransitionVersion == version;
+
+        private long BeginRequest(AudioSource source, bool replace)
         {
-            yield return FadeSourceRoutine(source, targetVolume, seconds);
-
-            if (source != null && stopAfter)
+            var state = State(source);
+            if (replace)
             {
-                source.Stop();
-                if (clearClip)
-                {
-                    source.clip = null;
-                }
+                state.RequestVersion++;
+                CancelTransition(source);
+                state.Envelope = 1f;
+                ApplyGain(source);
             }
-
-            _activeFades.Remove(source);
+            return state.RequestVersion;
         }
 
-        private IEnumerator FadeSourceRoutine(AudioSource source, float targetVolume, float seconds)
+        private void PreparePlayback(AudioSource source)
         {
-            if (source == null) yield break;
+            CancelTransition(source);
+            State(source).Envelope = 1f;
+            ApplyGain(source);
+        }
 
-            var start = source.volume;
-            targetVolume = Mathf.Clamp01(targetVolume);
-            seconds = Mathf.Max(0f, seconds);
-
-            if (seconds <= 0f)
-            {
-                source.volume = targetVolume;
-                yield break;
-            }
-
-            // Wait until the next frame so the fade duration is not impacted by inspector interactions.
-            yield return null;
-            if (source == null) yield break;
-
+        private IEnumerator Tween(AudioSource source, long version, float target, float seconds, bool envelope)
+        {
+            var state = State(source);
+            var start = envelope ? state.Envelope : state.Gain;
             var startTime = Time.realtimeSinceStartup;
-            var endTime = startTime + seconds;
-
-            while (source != null)
+            while (TransitionIsCurrent(source, version))
             {
-                var now = Time.realtimeSinceStartup;
-                var t = Mathf.InverseLerp(startTime, endTime, now);
-                source.volume = Mathf.Lerp(start, targetVolume, t);
-
-                if (t >= 1f)
-                {
-                    break;
-                }
-
+                var t = seconds <= 0f ? 1f : Mathf.Clamp01((Time.realtimeSinceStartup - startTime) / seconds);
+                var value = Mathf.Lerp(start, target, t);
+                if (envelope) state.Envelope = value;
+                else state.Gain = value;
+                ApplyGain(source);
+                if (t >= 1f) yield break;
                 yield return null;
             }
+        }
 
-            if (source != null)
+        private void FadeSource(AudioSource source, float target, float seconds, bool stopAfter = false)
+        {
+            if (!isActiveAndEnabled || source == null) return;
+            var state = State(source);
+            CancelTransition(source);
+            // A source fade supersedes a pending replacement as well as a BGM transition.
+            state.RequestVersion++;
+            target = Mathf.Clamp01(target);
+            if (!stopAfter)
             {
-                source.volume = targetVolume;
+                state.Gain *= state.Envelope;
+                state.Envelope = 1f;
             }
-        }
-
-        public void FadeBgmTo(float targetVolume, float seconds)
-        {
-            FadeSource(_bgmSource, targetVolume, seconds);
-        }
-
-        public void FadeBgmOut(float seconds, bool stopAfter = true)
-        {
-            FadeSource(_bgmSource, 0f, seconds, stopAfter, clearClip: stopAfter);
-        }
-
-        public void FadeSfxLoopTo(float targetVolume, float seconds)
-        {
-            FadeSource(_sfxLoopSource, targetVolume, seconds);
-        }
-
-        public void FadeVoiceLoopTo(float targetVolume, float seconds)
-        {
-            FadeSource(_voiceLoopSource, targetVolume, seconds);
-        }
-
-        public void FadeChannel(AudioChannel channel, float targetVolume, float seconds, bool stopAfter = false, bool useLoopSource = false)
-        {
-            AudioSource source = null;
-            switch (channel)
+            if (seconds <= 0f)
             {
-                case AudioChannel.Master:
-                case AudioChannel.Bgm:
-                    source = _bgmSource;
-                    break;
-                case AudioChannel.Sfx:
-                    source = useLoopSource ? _sfxLoopSource : _sfxSource;
-                    break;
-                case AudioChannel.Voice:
-                    source = useLoopSource ? _voiceLoopSource : _voiceSource;
-                    break;
+                if (stopAfter) StopSourceNow(source);
+                else { state.Gain = target; state.Envelope = 1f; ApplyGain(source); }
+                return;
             }
-
-            var clearClip = stopAfter && (channel == AudioChannel.Bgm || useLoopSource);
-            FadeSource(source, targetVolume, seconds, stopAfter, clearClip);
+            var version = state.TransitionVersion;
+            state.Transition = StartCoroutine(FadeAndFinalize(source, version, target, seconds, stopAfter));
         }
 
-        private void StopBgmTransition()
+        private IEnumerator FadeAndFinalize(AudioSource source, long version, float target, float seconds, bool stopAfter)
         {
-            if (_bgmTransitionCoroutine != null)
-            {
-                StopCoroutine(_bgmTransitionCoroutine);
-                _bgmTransitionCoroutine = null;
-            }
+            // Always suspend before completing so the coroutine slot cannot retain a completed routine.
+            yield return null;
+            yield return Tween(source, version, target, seconds, stopAfter);
+            if (!TransitionIsCurrent(source, version)) yield break;
+            if (stopAfter) StopSourceNow(source);
+            State(source).Transition = null;
         }
 
-        private IEnumerator TransitionBgmClip(AudioClip nextClip, float fadeOutSeconds, float fadeInSeconds)
+        private void StopSourceNow(AudioSource source)
         {
-            if (_bgmSource == null)
-            {
-                yield break;
-            }
+            source.Stop();
+            source.clip = null;
+            State(source).Envelope = 1f;
+            ApplyGain(source);
+        }
 
-            StopFade(_bgmSource);
+        private void StartClip(AudioSource source, AudioClip clip, bool loop, float fadeInSeconds)
+        {
+            PreparePlayback(source);
+            source.Stop();
+            source.clip = clip;
+            source.loop = loop;
+            var state = State(source);
+            state.Envelope = fadeInSeconds > 0f ? 0f : 1f;
+            ApplyGain(source);
+            source.Play();
+            if (fadeInSeconds > 0f)
+                state.Transition = StartCoroutine(FadeIn(source, state.TransitionVersion, fadeInSeconds));
+        }
 
+        private IEnumerator FadeIn(AudioSource source, long version, float seconds)
+        {
+            yield return null;
+            yield return Tween(source, version, 1f, seconds, true);
+            if (TransitionIsCurrent(source, version)) State(source).Transition = null;
+        }
+
+        private void PlayBgmCore(AudioClip clip, float fadeOutSeconds, float fadeInSeconds)
+        {
+            PreparePlayback(_bgmSource);
             if (fadeOutSeconds > 0f && _bgmSource.isPlaying && _bgmSource.clip != null)
             {
-                yield return FadeSourceRoutine(_bgmSource, 0f, fadeOutSeconds);
-                _bgmSource.Stop();
-                _bgmSource.clip = null;
+                var state = State(_bgmSource);
+                state.Transition = StartCoroutine(TransitionBgmClip(clip, fadeOutSeconds, fadeInSeconds, state.TransitionVersion));
             }
-            else
-            {
-                if (_bgmSource.isPlaying)
-                {
-                    _bgmSource.Stop();
-                }
-                _bgmSource.clip = null;
-            }
-
-            if (nextClip == null)
-            {
-                _bgmTransitionCoroutine = null;
-                yield break;
-            }
-
-            _bgmSource.clip = nextClip;
-            _bgmSource.loop = true;
-            _bgmSource.volume = fadeInSeconds > 0f ? 0f : 1f;
-            _bgmSource.Play();
-
-            if (fadeInSeconds > 0f)
-            {
-                yield return FadeSourceRoutine(_bgmSource, 1f, fadeInSeconds);
-            }
-
-            _bgmTransitionCoroutine = null;
+            else StartClip(_bgmSource, clip, true, fadeInSeconds);
         }
 
-        #endregion
-        #endregion
+        private IEnumerator TransitionBgmClip(AudioClip clip, float fadeOutSeconds, float fadeInSeconds, long version)
+        {
+            yield return null;
+            yield return Tween(_bgmSource, version, 0f, fadeOutSeconds, true);
+            if (!TransitionIsCurrent(_bgmSource, version)) yield break;
+            _bgmSource.Stop();
+            _bgmSource.clip = clip;
+            _bgmSource.loop = true;
+            State(_bgmSource).Envelope = fadeInSeconds > 0f ? 0f : 1f;
+            ApplyGain(_bgmSource);
+            _bgmSource.Play();
+            if (fadeInSeconds > 0f) yield return Tween(_bgmSource, version, 1f, fadeInSeconds, true);
+            if (TransitionIsCurrent(_bgmSource, version)) State(_bgmSource).Transition = null;
+        }
 
-        #region Play Audio
+        private void PlaySfxCore(AudioClip clip, bool loop, float fadeInSeconds)
+        {
+            if (loop) StartClip(_sfxLoopSource, clip, true, fadeInSeconds);
+            else
+            {
+                PreparePlayback(_sfxSource);
+                // One-shots share this source. Per-shot fade-in requires independent
+                // emitters, which is deliberately reserved for stage two.
+                _sfxSource.PlayOneShot(clip);
+            }
+        }
 
         public void PlayBgm(AudioClip clip, float fadeOutSeconds = 0f, float fadeInSeconds = 0f)
         {
-            if (clip == null)
-            {
-                Debug.LogWarning("[AudioController] PlayBgm called with null clip");
-                return;
-            }
-
-            if (_bgmSource == null)
-            {
-                EnsureAudioSources();
-                if (_bgmSource == null)
-                {
-                    Debug.LogError("[AudioController] BGM source is not available");
-                    return;
-                }
-            }
-
-            StopBgmTransition();
-
-            if (fadeOutSeconds > 0f && _bgmSource.isPlaying && _bgmSource.clip != null)
-            {
-                _bgmTransitionCoroutine = StartCoroutine(TransitionBgmClip(clip, fadeOutSeconds, fadeInSeconds));
-            }
-            else
-            {
-                StopFade(_bgmSource);
-                if (_bgmSource.isPlaying)
-                {
-                    _bgmSource.Stop();
-                }
-                _bgmSource.clip = clip;
-                _bgmSource.loop = true;
-                _bgmSource.volume = fadeInSeconds > 0f ? 0f : 1f;
-                _bgmSource.Play();
-
-                if (fadeInSeconds > 0f)
-                {
-                    FadeSource(_bgmSource, 1f, fadeInSeconds);
-                }
-            }
-
-            if (VerboseLogging) Debug.Log($"[AudioController] Playing BGM clip: {clip.name}");
+            if (!CanPlay(clip)) return;
+            BeginRequest(_bgmSource, true);
+            PlayBgmCore(clip, fadeOutSeconds, fadeInSeconds);
         }
 
         public void PlaySfx(AudioClip clip, bool loop = false, float fadeInSeconds = 0f)
         {
-            if (clip == null)
-            {
-                Debug.LogWarning("[AudioController] PlaySfx called with null clip");
-                return;
-            }
-
-            if (_sfxSource == null || _sfxLoopSource == null)
-            {
-                EnsureAudioSources();
-            }
-
-            if (loop)
-            {
-                if (_sfxLoopSource == null)
-                {
-                    Debug.LogError("[AudioController] Looping SFX source is not available");
-                    return;
-                }
-
-                _sfxLoopSource.Stop();
-                _sfxLoopSource.clip = clip;
-                _sfxLoopSource.loop = true;
-                _sfxLoopSource.volume = fadeInSeconds > 0f ? 0f : 1f;
-                _sfxLoopSource.Play();
-
-                if (fadeInSeconds > 0f)
-                {
-                    FadeSource(_sfxLoopSource, 1f, fadeInSeconds);
-                }
-
-                if (VerboseLogging) Debug.Log($"[AudioController] Playing looping SFX clip: {clip.name}");
-            }
-            else
-            {
-                if (_sfxSource == null)
-                {
-                    Debug.LogError("[AudioController] SFX source is not available");
-                    return;
-                }
-
-                StopFade(_sfxSource);
-                _sfxSource.PlayOneShot(clip);
-
-                if (VerboseLogging) Debug.Log($"[AudioController] Playing one-shot SFX clip: {clip.name}");
-            }
+            if (!CanPlay(clip)) return;
+            BeginRequest(loop ? _sfxLoopSource : _sfxSource, loop);
+            PlaySfxCore(clip, loop, fadeInSeconds);
         }
 
         public void PlayVoice(AudioClip clip, bool loop = false, float fadeInSeconds = 0f)
         {
-            if (clip == null)
-            {
-                Debug.LogWarning("[AudioController] PlayVoice called with null clip");
-                return;
-            }
-
-            if (_voiceSource == null || _voiceLoopSource == null)
-            {
-                EnsureAudioSources();
-            }
-
-            if (loop)
-            {
-                if (_voiceLoopSource == null)
-                {
-                    Debug.LogError("[AudioController] Looping voice source is not available");
-                    return;
-                }
-
-                _voiceLoopSource.Stop();
-                _voiceLoopSource.clip = clip;
-                _voiceLoopSource.loop = true;
-                _voiceLoopSource.volume = fadeInSeconds > 0f ? 0f : 1f;
-                _voiceLoopSource.Play();
-
-                if (fadeInSeconds > 0f)
-                {
-                    FadeSource(_voiceLoopSource, 1f, fadeInSeconds);
-                }
-
-                if (VerboseLogging) Debug.Log($"[AudioController] Playing looping voice clip: {clip.name}");
-            }
-            else
-            {
-                if (_voiceSource == null)
-                {
-                    Debug.LogError("[AudioController] Voice source is not available");
-                    return;
-                }
-
-                StopFade(_voiceSource);
-                _voiceSource.loop = false;
-                _voiceSource.clip = clip;
-                _voiceSource.volume = fadeInSeconds > 0f ? 0f : 1f;
-                _voiceSource.Play();
-
-                if (fadeInSeconds > 0f)
-                {
-                    FadeSource(_voiceSource, 1f, fadeInSeconds);
-                }
-
-                if (VerboseLogging) Debug.Log($"[AudioController] Playing voice clip: {clip.name}");
-            }
+            if (!CanPlay(clip)) return;
+            var source = loop ? _voiceLoopSource : _voiceSource;
+            BeginRequest(source, true);
+            StartClip(source, clip, loop, fadeInSeconds);
         }
 
-        #endregion
-
-        #region Play Audio By Key
+        private bool CanPlay(AudioClip clip)
+        {
+            if (!isActiveAndEnabled) return false;
+            if (clip != null) return true;
+            Debug.LogWarning("[AudioController] Play called with null clip");
+            return false;
+        }
 
         public void PlayBgm(string key, bool allowAsyncLoad = true, float fadeOutSeconds = 0f, float fadeInSeconds = 0f)
         {
-            PlayByKey(AudioCategory.Bgm, key, clip => PlayBgm(clip, fadeOutSeconds, fadeInSeconds), allowAsyncLoad);
+            PlayByKey(AudioCategory.Bgm, _bgmSource, true, key,
+                clip => PlayBgmCore(clip, fadeOutSeconds, fadeInSeconds), allowAsyncLoad);
         }
 
         public void PlaySfx(string key, bool loop = false, bool allowAsyncLoad = true, float fadeInSeconds = 0f)
         {
-            PlayByKey(AudioCategory.Sfx, key, clip => PlaySfx(clip, loop, fadeInSeconds), allowAsyncLoad);
+            PlayByKey(AudioCategory.Sfx, loop ? _sfxLoopSource : _sfxSource, loop, key,
+                clip => PlaySfxCore(clip, loop, fadeInSeconds), allowAsyncLoad);
         }
 
         public void PlayVoice(string key, bool loop = false, bool allowAsyncLoad = true, float fadeInSeconds = 0f)
         {
-            PlayByKey(AudioCategory.Voice, key, clip => PlayVoice(clip, loop, fadeInSeconds), allowAsyncLoad);
+            var source = loop ? _voiceLoopSource : _voiceSource;
+            PlayByKey(AudioCategory.Voice, source, true, key,
+                clip => StartClip(source, clip, loop, fadeInSeconds), allowAsyncLoad);
         }
 
-        private void PlayByKey(AudioCategory category, string key, Action<AudioClip> playAction, bool allowAsyncLoad)
+        private void PlayByKey(AudioCategory category, AudioSource source, bool replace, string key, Action<AudioClip> play, bool allowAsyncLoad)
         {
+            if (!isActiveAndEnabled || source == null) return;
             if (string.IsNullOrEmpty(key))
             {
                 Debug.LogWarning($"[AudioController] Play {category} called with empty key");
                 return;
             }
-
+            var request = BeginRequest(source, replace);
             if (!TryGetClipProvider(out var provider))
             {
                 Debug.LogWarning($"[AudioController] No clip provider available, cannot play {category} with key {key}");
                 return;
             }
-
+            var providerVersion = _providerVersion;
+            var serviceVersion = _serviceVersion;
             if (provider.TryGetClip(category, key, out var clip) && clip != null)
             {
-                playAction?.Invoke(clip);
-                return;
+                if (RequestIsCurrent(source, request, provider, providerVersion, serviceVersion)) play(clip);
             }
-
-            if (!allowAsyncLoad)
+            else if (allowAsyncLoad && provider is IAsyncAudioClipProvider asyncProvider)
             {
-                Debug.LogWarning($"[AudioController] Clip for key {key} not available synchronously");
-                return;
+                StartCoroutine(LoadAndPlayAsync(asyncProvider, category, key, source, request, providerVersion, serviceVersion, play));
             }
-
-            if (provider is IAsyncAudioClipProvider asyncProvider)
-            {
-                StartCoroutine(LoadAndPlayAsync(asyncProvider, category, key, playAction));
-                return;
-            }
-
-            Debug.LogWarning($"[AudioController] Clip provider does not support async loading for key {key}");
+            else Debug.LogWarning($"[AudioController] Clip for key {key} is unavailable; async loading disabled or unsupported");
         }
 
-        private IEnumerator LoadAndPlayAsync(IAsyncAudioClipProvider asyncProvider, AudioCategory category, string key, Action<AudioClip> playAction)
+        private bool RequestIsCurrent(AudioSource source, long request, IAudioClipProvider provider, long providerVersion, long serviceVersion)
         {
-            yield return asyncProvider.LoadClipAsync(category, key);
+            return this != null && isActiveAndEnabled && source != null &&
+                _serviceVersion == serviceVersion && _providerVersion == providerVersion &&
+                State(source).RequestVersion == request && ReferenceEquals(_clipProvider, provider) &&
+                (!(provider is UnityEngine.Object unityObject) || unityObject != null);
+        }
 
-            if (!TryGetClipProvider(out var provider))
-            {
-                yield break;
-            }
-
-            if (provider.TryGetClip(category, key, out var clip) && clip != null)
-            {
-                playAction?.Invoke(clip);
-            }
+        private IEnumerator LoadAndPlayAsync(IAsyncAudioClipProvider provider, AudioCategory category, string key,
+            AudioSource source, long request, long providerVersion, long serviceVersion, Action<AudioClip> play)
+        {
+            AudioClip clip = null;
+            if (provider is IResultAudioClipProvider resultProvider)
+                yield return resultProvider.LoadClipAsync(category, key, result => clip = result);
             else
             {
-                Debug.LogWarning($"[AudioController] Failed to load clip asynchronously for key {key}");
+                yield return provider.LoadClipAsync(category, key);
+                if (!RequestIsCurrent(source, request, provider, providerVersion, serviceVersion)) yield break;
+                // Legacy providers retain their original lookup contract.
+                provider.TryGetClip(category, key, out clip);
             }
+            if (!RequestIsCurrent(source, request, provider, providerVersion, serviceVersion)) yield break;
+            if (clip != null)
+            {
+                if (RequestIsCurrent(source, request, provider, providerVersion, serviceVersion)) play(clip);
+            }
+            else Debug.LogWarning($"[AudioController] Failed to load clip asynchronously for key {key}");
         }
 
-        #endregion
+        public void FadeBgmTo(float targetVolume, float seconds) => FadeSource(_bgmSource, targetVolume, seconds);
+        public void FadeBgmOut(float seconds, bool stopAfter = true) => FadeSource(_bgmSource, 0f, seconds, stopAfter);
+        public void FadeSfxLoopTo(float targetVolume, float seconds) => FadeSource(_sfxLoopSource, targetVolume, seconds);
+        public void FadeVoiceLoopTo(float targetVolume, float seconds) => FadeSource(_voiceLoopSource, targetVolume, seconds);
 
-        #region Stop Audio
-
-        public void StopBgm(float fadeOutSeconds = 0f)
+        public void FadeChannel(AudioChannel channel, float targetVolume, float seconds, bool stopAfter = false, bool useLoopSource = false)
         {
-            if (_bgmSource == null) return;
-            StopBgmTransition();
-            if (fadeOutSeconds > 0f)
+            if (!isActiveAndEnabled) return;
+            switch (channel)
             {
-                FadeSource(_bgmSource, 0f, fadeOutSeconds, true, clearClip: true);
+                case AudioChannel.Master:
+                    CancelMasterFade();
+                    if (stopAfter)
+                    {
+                        // Snapshot the stop as independent source transitions. Fresh playback
+                        // cancels only its old stop; other sources still finish stopping.
+                        foreach (var source in AllSources()) FadeSource(source, targetVolume, seconds, true);
+                    }
+                    else if (seconds <= 0f)
+                    {
+                        _masterGain = Mathf.Clamp01(targetVolume);
+                        ApplyAllGains();
+                    }
+                    else _masterFade = StartCoroutine(FadeMaster(Mathf.Clamp01(targetVolume), seconds, _masterVersion));
+                    break;
+                case AudioChannel.Bgm: FadeSource(_bgmSource, targetVolume, seconds, stopAfter); break;
+                case AudioChannel.Sfx: FadeSource(useLoopSource ? _sfxLoopSource : _sfxSource, targetVolume, seconds, stopAfter); break;
+                case AudioChannel.Voice: FadeSource(useLoopSource ? _voiceLoopSource : _voiceSource, targetVolume, seconds, stopAfter); break;
             }
-            else
-            {
-                StopFade(_bgmSource);
-                _bgmSource.Stop();
-                _bgmSource.clip = null;
-            }
-            if (VerboseLogging) Debug.Log("[AudioController] BGM stopped");
         }
+
+        private IEnumerable<AudioSource> AllSources()
+        {
+            yield return _bgmSource;
+            yield return _sfxSource;
+            yield return _sfxLoopSource;
+            yield return _voiceSource;
+            yield return _voiceLoopSource;
+        }
+
+        private void CancelMasterFade()
+        {
+            _masterVersion++;
+            if (_masterFade != null) StopCoroutine(_masterFade);
+            _masterFade = null;
+        }
+
+        private IEnumerator FadeMaster(float target, float seconds, long version)
+        {
+            var start = _masterGain;
+            yield return null;
+            var startTime = Time.realtimeSinceStartup;
+            while (version == _masterVersion && isActiveAndEnabled)
+            {
+                var t = Mathf.Clamp01((Time.realtimeSinceStartup - startTime) / seconds);
+                _masterGain = Mathf.Lerp(start, target, t);
+                ApplyAllGains();
+                if (t >= 1f) break;
+                yield return null;
+            }
+            if (version == _masterVersion) _masterFade = null;
+        }
+
+        public void StopBgm(float fadeOutSeconds = 0f) => FadeSource(_bgmSource, 0f, fadeOutSeconds, true);
 
         public void StopSfx(bool stopLoopOnly = false, float fadeOutSeconds = 0f)
         {
-            if (_sfxSource != null && !stopLoopOnly)
-            {
-                if (fadeOutSeconds > 0f)
-                {
-                    FadeSource(_sfxSource, 0f, fadeOutSeconds, true, clearClip: true);
-                }
-                else
-                {
-                    StopFade(_sfxSource);
-                    _sfxSource.Stop();
-                    _sfxSource.clip = null;
-                }
-            }
-
-            if (_sfxLoopSource != null)
-            {
-                if (fadeOutSeconds > 0f)
-                {
-                    FadeSource(_sfxLoopSource, 0f, fadeOutSeconds, true, clearClip: true);
-                }
-                else
-                {
-                    StopFade(_sfxLoopSource);
-                    _sfxLoopSource.Stop();
-                    _sfxLoopSource.clip = null;
-                }
-            }
-
-            if (VerboseLogging) Debug.Log("[AudioController] SFX stopped");
+            if (!stopLoopOnly) FadeSource(_sfxSource, 0f, fadeOutSeconds, true);
+            FadeSource(_sfxLoopSource, 0f, fadeOutSeconds, true);
         }
 
         public void StopVoice(bool stopLoopOnly = false, float fadeOutSeconds = 0f)
         {
-            if (_voiceSource != null && !stopLoopOnly)
-            {
-                if (fadeOutSeconds > 0f)
-                {
-                    FadeSource(_voiceSource, 0f, fadeOutSeconds, true, clearClip: true);
-                }
-                else
-                {
-                    StopFade(_voiceSource);
-                    _voiceSource.Stop();
-                    _voiceSource.clip = null;
-                }
-            }
+            if (!stopLoopOnly) FadeSource(_voiceSource, 0f, fadeOutSeconds, true);
+            FadeSource(_voiceLoopSource, 0f, fadeOutSeconds, true);
+        }
 
-            if (_voiceLoopSource != null)
+        private void OnDisable()
+        {
+            _serviceVersion++;
+            CancelMasterFade();
+            StopAllCoroutines();
+            foreach (var pair in _states)
             {
-                if (fadeOutSeconds > 0f)
-                {
-                    FadeSource(_voiceLoopSource, 0f, fadeOutSeconds, true, clearClip: true);
-                }
-                else
-                {
-                    StopFade(_voiceLoopSource);
-                    _voiceLoopSource.Stop();
-                    _voiceLoopSource.clip = null;
-                }
+                pair.Value.RequestVersion++;
+                pair.Value.TransitionVersion++;
+                pair.Value.Transition = null;
+                if (pair.Key != null) StopSourceNow(pair.Key);
             }
+        }
 
-            if (VerboseLogging) Debug.Log("[AudioController] Voice stopped");
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
         }
 
         #endregion

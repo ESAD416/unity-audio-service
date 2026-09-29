@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace Controller.Audio
 {
-    public class FallbackAudioClipProvider : MonoBehaviour, IAsyncAudioClipProvider
+    public class FallbackAudioClipProvider : MonoBehaviour, IResultAudioClipProvider
     {
         [SerializeField] private MonoBehaviour mainProvider;
         [SerializeField] private MonoBehaviour backupProvider;
@@ -79,12 +79,12 @@ namespace Controller.Audio
         public bool TryGetClip(AudioCategory category, string key, out AudioClip clip)
         {
             clip = null;
-            if (_main != null && _main.TryGetClip(category, key, out clip) && clip != null)
+            if (IsAlive(_main) && _main.TryGetClip(category, key, out clip) && clip != null)
             {
                 return true;
             }
 
-            if (_backup != null && _backup.TryGetClip(category, key, out clip) && clip != null)
+            if (IsAlive(_backup) && _backup.TryGetClip(category, key, out clip) && clip != null)
             {
                 return true;
             }
@@ -94,43 +94,57 @@ namespace Controller.Audio
 
         public bool IsLoading(AudioCategory category, string key)
         {
-            if (_mainAsync != null && _mainAsync.IsLoading(category, key)) return true;
-            if (_backupAsync != null && _backupAsync.IsLoading(category, key)) return true;
+            if (IsAlive(_mainAsync) && _mainAsync.IsLoading(category, key)) return true;
+            if (IsAlive(_backupAsync) && _backupAsync.IsLoading(category, key)) return true;
             return false;
         }
 
         public bool IsCached(AudioCategory category, string key)
         {
-            if (_mainAsync != null && _mainAsync.IsCached(category, key)) return true;
-            if (_backupAsync != null && _backupAsync.IsCached(category, key)) return true;
+            if (IsAlive(_mainAsync) && _mainAsync.IsCached(category, key)) return true;
+            if (IsAlive(_backupAsync) && _backupAsync.IsCached(category, key)) return true;
             return false;
         }
 
+        private static bool IsAlive(IAudioClipProvider provider) =>
+            provider != null && (!(provider is Object unityObject) || unityObject != null);
+
         public System.Collections.IEnumerator LoadClipAsync(AudioCategory category, string key)
         {
-            if (_mainAsync != null)
-            {
-                yield return _mainAsync.LoadClipAsync(category, key);
-                if (_main != null && _main.TryGetClip(category, key, out var clip) && clip != null)
-                {
-                    yield break;
-                }
-            }
+            yield return LoadClipAsync(category, key, null);
+        }
 
-            if (_backupAsync != null)
+        public System.Collections.IEnumerator LoadClipAsync(AudioCategory category, string key, System.Action<AudioClip> completed)
+        {
+            AudioClip result = null;
+            if (IsAlive(_mainAsync))
+                yield return LoadResult(_mainAsync, category, key, clip => result = clip);
+            if (this == null) { completed?.Invoke(null); yield break; }
+            if (result == null && IsAlive(_backupAsync))
+                yield return LoadResult(_backupAsync, category, key, clip => result = clip);
+            completed?.Invoke(this != null ? result : null);
+        }
+
+        private static System.Collections.IEnumerator LoadResult(IAsyncAudioClipProvider provider,
+            AudioCategory category, string key, System.Action<AudioClip> completed)
+        {
+            if (provider is IResultAudioClipProvider resultProvider)
             {
-                yield return _backupAsync.LoadClipAsync(category, key);
-                if (_backup != null && _backup.TryGetClip(category, key, out var clip) && clip != null)
-                {
-                    yield break;
-                }
+                yield return resultProvider.LoadClipAsync(category, key, completed);
+            }
+            else
+            {
+                yield return provider.LoadClipAsync(category, key);
+                AudioClip clip = null;
+                if (IsAlive(provider)) provider.TryGetClip(category, key, out clip);
+                completed(clip);
             }
         }
 
         public void ReleaseClip(AudioCategory category, string key)
         {
-            _mainAsync?.ReleaseClip(category, key);
-            _backupAsync?.ReleaseClip(category, key);
+            if (IsAlive(_mainAsync)) _mainAsync.ReleaseClip(category, key);
+            if (IsAlive(_backupAsync)) _backupAsync.ReleaseClip(category, key);
         }
     }
 }

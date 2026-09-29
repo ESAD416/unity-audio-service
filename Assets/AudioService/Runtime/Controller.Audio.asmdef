@@ -1,0 +1,5 @@
+{
+  "name": "Controller.Audio",
+  "references": ["Unity.Addressables", "Unity.ResourceManager"],
+  "autoReferenced": true
+}
