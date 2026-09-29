@@ -91,9 +91,9 @@ namespace Controller.Audio
 
     public readonly struct AudioDiagnostics
     {
-        public readonly int Playing, Paused, Loading, PooledSources, CreatedSources, CachedClips, ClipUsers, PendingLoads;
+        public readonly int Playing, Paused, Loading, PooledSources, CreatedSources, CachedClips, ClipUsers, PendingLoads, PreparingClips;
         public readonly string LastFailure;
-        internal AudioDiagnostics(int playing, int paused, int loading, int pooled, int created, int cached, int users, int pending, string failure)
-        { Playing = playing; Paused = paused; Loading = loading; PooledSources = pooled; CreatedSources = created; CachedClips = cached; ClipUsers = users; PendingLoads = pending; LastFailure = failure; }
+        internal AudioDiagnostics(int playing, int paused, int loading, int pooled, int created, int cached, int users, int pending, string failure, int preparing = 0)
+        { Playing = playing; Paused = paused; Loading = loading; PooledSources = pooled; CreatedSources = created; CachedClips = cached; ClipUsers = users; PendingLoads = pending; LastFailure = failure; PreparingClips = preparing; }
     }
 }

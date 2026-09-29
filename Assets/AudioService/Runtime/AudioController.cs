@@ -262,6 +262,14 @@ namespace Controller.Audio
         public void SetMuted(AudioChannel channel, bool muted) { if ((int)channel >= 0 && (int)channel < 4) engine?.SetMuted(channel, muted); }
         public void Preload(AudioCategory category, AudioId id, string group, Action<bool> completed = null)
         { if (!Ready || string.IsNullOrWhiteSpace(group) || string.IsNullOrWhiteSpace(id.Value)) { AudioCallbacks.Invoke(completed, false); return; } engine.Preload(Resolve(category, id), group, completed); }
+        /// <summary>Retain a clip in a group and complete when Unity reports its audio data loaded.
+        /// Call on the main thread during a loading phase: LoadAudioData may block depending on import settings.</summary>
+        public void PrepareClip(AudioCategory category, AudioId id, string group, Action<bool> completed = null)
+        {
+            if (!Ready || (int)category < 0 || (int)category > 2 || string.IsNullOrWhiteSpace(group) || string.IsNullOrWhiteSpace(id.Value))
+            { AudioCallbacks.Invoke(completed, false); return; }
+            engine.PrepareClip(Resolve(category, id), group, completed);
+        }
         public void ReleaseGroup(string group) { if (!string.IsNullOrWhiteSpace(group)) engine?.ReleaseGroup(group); }
         public void ReleaseUnusedClips() => engine?.ReleaseUnused();
         public bool TryGetCachedClip(AudioCategory category, AudioId id, out AudioClip clip)

@@ -1,5 +1,13 @@
 # 變更紀錄
 
+## Unreleased — 第二階段效能與資料準備（2026-09-29）
+
+- 每幀只更新使用中的聲源，音量增益改變才寫入 native property；保留 Master／分類／舊分支淡出的既有行為。
+- 無並發限制時省略 active 掃描；快取 key 改用 tuple，命中時直接交付獨立 lease。修正失敗回呼立即重試同 ID 的邊界。
+- 新增 `PrepareClip`，成功回呼表示 Unity 的音訊資料已 Loaded；群組、Provider 切換及 Shutdown 的取消通知恰好一次。新增 `Diagnostics.PreparingClips`；Preload 原語意不變。
+- 同一 Editor 的暖快取播放配置事件由每次 18 降為 10；256 聲源停止後 1,000 次 Tick 由 9.5355 ms 降為 0.0339 ms。僅為局部量測，完整方法及限制見改善計畫 §5.5。
+- 118 項不同 PlayMode 行為測試、1 項量測及 2 項 Reload 情境通過；測試／工具僅保留本機。資料準備仍有解碼與記憶體成本，應在載入階段使用；Player／packed content 驗證未執行。
+
 ## Unreleased — 第二階段回呼補強（2026-09-29）
 
 - 修正 BGM 取消回呼內再次播放導致 handle 卡在 Loading；完成事件改於內部狀態變更完成後依序派送，保留即時終態與晚訂閱行為。

@@ -94,14 +94,26 @@ Fallback 有兩個明確政策：
 audio.Preload(AudioCategory.Sfx, "ui.result", "level-1", loaded =>
     UnityEngine.Debug.Log($"Preload: {loaded}"));
 
-// 離開用途群組時移除該群組的保留需求。
+// 在載入畫面準備實際音訊資料；可能依匯入設定同步解碼。
+audio.PrepareClip(AudioCategory.Bgm, "music.title", "level-1", ready =>
+{
+    if (ready) audio.PlayBgmHandle("music.title");
+});
+```
+
+離開用途群組時，再移除該群組的保留需求：
+
+```csharp
 audio.ReleaseGroup("level-1");
 // 普通播放建立的快取另由此方法標記釋放；仍在使用者結束後才實際歸還。
 audio.ReleaseUnusedClips();
 ```
 
+`Preload` 成功只保證取得並保留 AudioClip 資產；`PrepareClip` 另外呼叫需要的 `LoadAudioData`，成功回呼時 `loadState == Loaded`。兩者均在主執行緒呼叫，完成回呼可能同步發生；背景載入由匯入設定決定。`PrepareClip` 不保證播放端到端延遲或 Streaming 全曲已解碼，也不修改音檔匯入設定。準備成本與記憶體仍存在，適合在載入畫面對即將使用的素材執行。
+
+- `PrepareClip` 的失敗、群組取消、Provider 世代切換及 Shutdown 都回呼 false 一次；取消服務端等待不會中止 Unity 已啟動的底層載入。成功後由群組持有，普通快取／播放亦可能延長持有時間。服務不主動呼叫 `UnloadAudioData`，避免影響共用同一 clip 的外部使用者。
 - 預載／Provider 回呼的例外會記錄並隔離，不中斷其他等待者。`ReleaseGroup` 只取消呼叫當時的需求，回呼中新建的需求保留。
-- `ReleaseGroup` 取消該群組尚未完成的預載，移除群組保留；不會停止使用中的聲音，也不清除其他群組／普通快取的保留。
+- `ReleaseGroup` 取消該群組尚未完成的預載與資料準備，移除群組保留；不會停止使用中的聲音，也不清除其他群組／普通快取的保留。
 - `ReleaseUnusedClips` 清除普通快取保留；有播放使用者或群組保留時，素材持續有效。
 - 原始 `ReleaseClip` 不會使內建 Provider 的有效 lease 提前失效。Provider 更換／銷毀後，已取得的播放 lease 仍保持到最後使用者離開。
 - Resources 在最後 lease／快取保留離開後移除自身引用，不強制 `UnloadAsset`，避免傷及外部持有者；實際 native 記憶體回收依 Unity 的未使用資產清理。
@@ -123,7 +135,7 @@ var handle = audio.PlaySfxHandle("ui.result", new PlayOptions
 });
 ```
 
-超過上限可回傳 Rejected 或停止最舊實例。聲源歸還時清除 clip、pitch、loop、Mixer、暫停標記、播放包絡與轉換。池降低重複建立的成本；同時混音的數量仍由並發政策與 Unity AudioSettings 分別決定。
+超過上限可回傳 Rejected 或停止最舊實例。聲源歸還時清除 clip、pitch、loop、Mixer、暫停標記、播放包絡與轉換。每幀僅巡覽使用中的聲源；增益改變時才更新 volume，分類／Master 淡出仍同步更新舊 API 聲源。池降低重複建立的成本；同時混音的數量仍由並發政策與 Unity AudioSettings 分別決定。
 
 - `SetGamePaused(true)` 暫停一般播放；`IgnoreGamePause=true` 的 UI 聲音略過此原因。
 - 個別 `handle.Pause()` 的原因獨立保存，解除遊戲暫停不會擅自恢復個別暫停。
@@ -162,6 +174,6 @@ Bootstrap 以自身作為全域 Provider 註冊擁有者；舊擁有者退訂不
 
 ## 診斷與驗證
 
-`Diagnostics` 提供 Playing、Paused、Loading、PooledSources、CreatedSources、CachedClips、ClipUsers、PendingLoads 與 LastFailure。快取統計指目前 Provider 世代的服務快取；切換後仍在播放的舊 lease 會保持有效，但不列入新世代快取統計。`verboseLogging` 可開關額外日誌。
+`Diagnostics` 提供 Playing、Paused、Loading、PooledSources、CreatedSources、CachedClips、ClipUsers、PendingLoads、PreparingClips 與 LastFailure。`PreparingClips` 包含等待資產或音訊資料的準備需求，`PendingLoads` 僅計服務資產載入。快取統計指目前 Provider 世代的服務快取；切換後仍在播放的舊 lease 會保持有效，但不列入新世代快取統計。`verboseLogging` 可開關額外日誌。
 
-驗收摘要見 [改善計畫 §5.4](unity-audio-service-improvement-plan.md#54-第二階段實作與驗收紀錄)，相容性變更見 [CHANGELOG](CHANGELOG.md)。本機測試位於受忽略的 `Assets/AudioService/Tests/`；重跑工具在 `Tools/AudioService/`，XML／Profiler 操作紀錄在 `work/stage-two/`，均不隨 Git 發布。
+原第二階段驗收見 [改善計畫 §5.4](unity-audio-service-improvement-plan.md#54-第二階段實作與驗收紀錄)，後續修正與效能前後量測見同文件 §5.5，相容性變更見 [CHANGELOG](CHANGELOG.md)。本機測試位於受忽略的 `Assets/AudioService/Tests/`；重跑工具在 `Tools/AudioService/`，XML／Profiler 操作紀錄在 `work/stage-two/` 與 `work/stage-two-hardening/`，均不隨 Git 發布。

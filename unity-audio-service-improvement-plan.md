@@ -2,9 +2,9 @@
 
 文件日期：2026-09-29
 
-文件版本：1.6
+文件版本：1.7
 
-狀態：第一階段及第二階段原驗收完成；第二階段回呼補強驗收完成，效能量測進行中；第三階段尚未開始
+狀態：第一階段、第二階段及回呼／效能補強完成本機 Editor 驗收；第三階段尚未開始
 
 本文件整合專案審查、三階段改善目標，以及三個開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。
 
@@ -307,7 +307,7 @@ Unity 自動重新序列化的 `ProjectSettings.asset`／`EditorSettings.asset` 
 
 本機原重現結果：`work/stage-two-review/regressions.xml`，3／3 失敗（2026-09-29 18:14 台北）。補強後測試與量測輸出放在 `work/stage-two-hardening/`；測試仍依既定規則受忽略。
 
-**效能候選與決策順序：** 修正 R7～R9 後，先量 24／64／256 聲源的首次／快取播放、全部停止後的 Tick CPU 與 GC，再決定使用中聲源更新、無限制 MakeRoom 快速路徑及資料預載。現有 Tick 掃描全部歷史建立的聲源、MakeRoom 無限制仍掃 active、快取命中仍配置 Waiter／delivery 容器，是可定位的工作量；尚未量測前不宣告改善幅度。現有五個 mp3 未啟用 preloadAudioData／loadInBackground，資產載入完成不代表音訊資料已準備，須另量首次 AudioSource.Play。Player／packed content 效能仍屬第三階段驗證。
+**效能候選與決策順序（執行前紀錄）：** 修正 R7～R9 後，先量 24／64／256 聲源的首次／快取播放、全部停止後的 Tick CPU 與 GC，再決定使用中聲源更新、無限制 MakeRoom 快速路徑及資料預載。現有 Tick 掃描全部歷史建立的聲源、MakeRoom 無限制仍掃 active、快取命中仍配置 Waiter／delivery 容器，是可定位的工作量；尚未量測前不宣告改善幅度。現有五個 mp3 未啟用 preloadAudioData／loadInBackground，資產載入完成不代表音訊資料已準備，須另量首次 AudioSource.Play。Player／packed content 效能仍屬第三階段驗證。
 
 **新增設計參考：** [AudioConductor 的分類／優先序限額](https://github.com/CyberAgentGameEntertainment/AudioConductor#throttle-typethrottle-limit)、[配置驗證](https://github.com/CyberAgentGameEntertainment/AudioConductor#cuesheet-validation) 與 [ID 生成](https://github.com/CyberAgentGameEntertainment/AudioConductor#cue-enum-definition)，可對應重要聲音保護、Catalog 重複／缺失檢查；[LucidAudio SetLink](https://github.com/annulusgames/LucidAudio#setlink)／[Grouping](https://github.com/annulusgames/LucidAudio#grouping) 可參考播放擁有者與播放群組。這輪核對作者 README／API 文件，未驗證其內部實作或效能、未匯入第三方程式碼。
 
@@ -317,7 +317,33 @@ Unity 自動重新序列化的 `ProjectSettings.asset`／`EditorSettings.asset` 
 
 **可靠性驗收：** 106／106 PlayMode 全數通過，包含原 92 項與新增 14 項。新增測試涵蓋 R7～R9、Stop 回呼重新播放、取消回呼 Stop／Shutdown、Provider 新世代、StealOldest 回呼重播、Shutdown 回呼 Initialize、群組回呼新增需求、設定事件拋錯、Addressables 第一個回呼例外／取消其餘等待者／store 世代刷新。另兩項無 Domain Reload／無 Domain 與 Scene Reload 重入情境通過；XML 包含 RequiredTest 共 3／3。結果檔為 `reliability.xml` 與 `lifecycle.xml`。
 
-效能量測：待執行。
+**效能實作：** 每幀只巡訪使用中的 emitter，回收時以尾端交換移除；增益未變不重寫 AudioSource.volume。分類／Master／舊分支淡出仍在增益變更時更新全部來源，保留既有可觀察行為。無全域／單音效限額時 MakeRoom 直接返回；移除 Loaded 的重複 active 搜尋。快取 key 使用分類＋ID tuple，命中時直接交付獨立 lease，省去 waiter／交付容器；失敗回呼立即重試同一 ID 時建立新 entry，避免舊失敗紀錄干擾重試。聲源池容量與預設並發上限不變。
+
+**資料準備 API：** 新增 `PrepareClip(category, id, group, completed)`；資產取得後視需要呼叫 LoadAudioData，等到 loadState 為 Loaded 才回呼 true。`Preload` 保持只保證資產取得的原語意。準備完成後由群組保留；ReleaseGroup、Provider 世代變更或 Shutdown 取消尚未完成的準備並回呼 false 一次。取消不等於中止 Unity 底層載入，服務不強制 UnloadAudioData；`Diagnostics.PreparingClips` 包含等待資產及音訊資料的需求。所有入口在主執行緒呼叫，回呼可能同步；未啟用 loadInBackground 時仍可能阻塞，應在載入階段呼叫。Streaming 的 Loaded 亦不等於全曲已解碼或保證實際出聲延遲。
+
+**前後量測方法：** 同一台 macOS 27.0、Unity 6000.6.3f1 Editor；可靠性提交 `f5daaa0` 對本次優化版本。兩次均單獨執行 `AudioPerformanceMeasurements.Capture`，相同 fixture／設定：無服務並發上限，24／64／256 個四秒循環測試 clip，先建立並回收來源；每個暖池測點 7 次，表格取中位數。Tick 為同一幀內直接呼叫 Tick(0) 一千次，使用中測點無淡出，不能解讀為一千幀、整體 frame time 或 Unity 混音成本。全數停止後仍保留峰值來源（含 5 個相容聲源），因此可檢驗歷史峰值對閒置更新的影響。
+
+| 聲源峰值 | 測點 | 優化前 ms | 優化後 ms |
+| --- | --- | --- | --- |
+| 24 | 快取播放整批 | 0.1977 | 0.0570 |
+| 24 | 使用中 Tick × 1,000 | 1.2008 | 0.1380 |
+| 24 | 停止後 Tick × 1,000 | 1.1284 | 0.0344 |
+| 64 | 快取播放整批 | 0.2371 | 0.1297 |
+| 64 | 使用中 Tick × 1,000 | 2.5979 | 0.3110 |
+| 64 | 停止後 Tick × 1,000 | 2.5605 | 0.0346 |
+| 256 | 快取播放整批 | 1.3422 | 0.5697 |
+| 256 | 使用中 Tick × 1,000 | 9.8204 | 1.1885 |
+| 256 | 停止後 Tick × 1,000 | 9.5355 | 0.0339 |
+
+`GC.Alloc` 使用主執行緒 ProfilerRecorder 的 sample Count 記錄**配置事件次數**，每次執行先用已知配置校驗；不是配置 bytes。暖快取整批配置在 24／64／256 聲音下，分別由 432／1,152／4,608 次降為 240／640／2,560 次，即每次播放由 18 降為 10 次。上述 active／idle Tick 測點均未記錄到配置，不表示整個服務零 GC。計時包含相同的 profiler 採樣負擔；單次冷建立值保留 CSV，但受 JIT／原生物件建立影響，不據此推算穩定改善率。
+
+**音訊資料 A/B：** 在優化後同一次量測中，以範例 ukulele_song 的已取得資產測 3 次：音訊資料 Unloaded 時，AudioSource.Play 呼叫中位數為 257.971 ms；先 LoadAudioData 後 Play 為 0.0188 ms，而準備本身仍花 239.404 ms。這證明可將本範例的同步準備成本移出首次播放，沒有消除解碼工作。AudioListener.GetOutputData 首次非零值的輪詢觀察分別為 271.076／7.542 ms；受幀／音訊緩衝影響，不等同使用者耳端延遲。準備後 Profiler 回報此 clip 約 24.5 MB，不代表專案完整 Audio Memory，也不據此承諾 ReleaseGroup 後立即歸零。正式五個音檔匯入設定未修改；背景模式只使用受忽略的測試副本驗證。
+
+**最終驗收：** 118 項不同的 PlayMode 行為測試通過，另有 1 項量測檢查。`final-playmode.xml` 為 117／117（116 行為＋1 量測）；之後 `final-background.xml` 的 PrepareClip fixture 12／12 通過，其中 10 項重跑、2 項新增真實背景 Loading／途中取消情境。正式程式保持不變，獨立 `after.xml` 量測 1／1 通過；`final-lifecycle.xml` 3／3 通過，包含 2 項 Reload 生命週期情境及框架 RequiredTest。新增測試也涵蓋池中交換移除的同幀大量淡出、閒置分類淡出後重用、暫停時設定變更、PrepareClip 的共享／失敗／回呼重入／Provider 切換／Shutdown。原 106 項可靠性回歸保留。
+
+**重跑與交付：** 本機 runner 為 `Tools/AudioService/run-hardening.py`，說明為 `Tools/AudioService/HARDENING.md`；原始量測為 `work/stage-two-hardening/perf-baseline.csv`、`perf-after.csv`，同目錄保留 XML 與日誌。資料、測試與 runner 均受 Git 忽略，正式功能不依賴它們。可靠性提交為 `f5daaa0`，本次效能/API 另以獨立提交保存；僅本機 commit，沒有 push。
+
+本次完成定位到的更新／快取成本與顯式資料準備；尚未進行 Player、packed Addressables、平台長時間壓測、GC bytes、DSP CPU 或完整音訊記憶體量測。Catalog 索引／驗證、重要聲音保護、池容量政策、播放 owner、LRU 與 3D／DSP 功能仍留待需求明確後評估；第三階段尚未開始。
 
 ## 6. 第三階段：對外套件
 
@@ -484,7 +510,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [ ] 升級後 Addressables content build 與 Player 建置／播放驗證。
 - [x] 第一階段實作與驗收（最終 39／39 PlayMode 測試及 Editor 原場景播放檢查通過，見 4.5）。
 - [x] 第二階段 C1～C7 實作與本機 Editor 驗收（92／92 PlayMode、2 項 Play Mode 重入情境及原場景操作／聲源池基準通過，見 5.4）。
-- [ ] 第二階段補強 R7～R9 與效能量測（見 5.5）。
+- [x] 第二階段補強 R7～R9、效能前後量測與 PrepareClip（118 項行為測試、量測及 Reload 驗收通過，見 5.5）。
 - [ ] 第三階段實作與驗收。
 
 ## 12. 原專案與 Unity 技術依據
@@ -510,3 +536,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.4 | 2026-09-29 | 完成第一階段 R1～R6、39 項本機回歸與 Editor 原場景播放檢查；記錄結果回傳的可選 Provider 介面、來源／Master 增益及停用語意；更新驗收與仍未驗證範圍 |
 | 1.5 | 2026-09-29 | 完成第二階段 C1～C7：handle、目錄、素材 lease、聲源池、設定／暫停與生命週期；92 項 PlayMode 與 2 項重入情境通過，記錄 Editor 操作、29 聲源重用及 Profiler 基準，明列相容性變更與第三階段界線 |
 | 1.6 | 2026-09-29 | 合併第二階段後續研究、三項已重現的回呼缺陷與新增開源參考；106 項 PlayMode 與 Reload 生命週期驗收通過，效能量測待執行 |
+| 1.7 | 2026-09-29 | 完成使用中聲源更新、快取及無限制播放路徑優化；新增 PrepareClip 與背景載入／取消驗證；回填同環境 CPU／配置事件／音訊資料 A/B、118 項行為測試與第三階段界線 |

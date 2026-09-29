@@ -10,14 +10,15 @@ namespace Controller.Audio
         private sealed class Waiter { public Action<AudioClipLease> Callback; public string Group; }
         private sealed class Entry
         {
-            public string Key;
+            public (AudioCategory Category, string Id) Key;
             public AudioClipLease Lease;
             public bool Loading = true, Retained;
             public int Users;
             public readonly HashSet<string> Groups = new();
             public readonly List<Waiter> Waiters = new();
         }
-        private readonly Dictionary<string, Entry> entries = new();
+        private static readonly Action NoCancellation = () => { };
+        private readonly Dictionary<(AudioCategory, string), Entry> entries = new();
         private readonly MonoBehaviour host;
         private readonly IAudioClipProvider provider;
         private bool disposed;
@@ -25,7 +26,7 @@ namespace Controller.Audio
         public int UserCount { get { int n = 0; foreach (var e in entries.Values) n += e.Users; return n; } }
         public int LoadingCount { get { int n = 0; foreach (var e in entries.Values) if (e.Loading) n++; return n; } }
         public AudioClipStore(MonoBehaviour host, IAudioClipProvider provider) { this.host = host; this.provider = provider; }
-        private static string Key(AudioClipAddress address) => (int)address.Category + ":" + address.Id;
+        private static (AudioCategory, string) Key(AudioClipAddress address) => (address.Category, address.Id);
         public bool TryGetCached(AudioClipAddress address, out AudioClip clip)
         {
             clip = null;
@@ -34,17 +35,25 @@ namespace Controller.Audio
         }
         public Action Request(AudioClipAddress address, bool allowAsync, Action<AudioClipLease> callback, string group = null)
         {
-            if (disposed || !AudioValues.Alive(provider)) { AudioCallbacks.Deliver(callback, null); return () => { }; }
+            if (disposed || !AudioValues.Alive(provider)) { AudioCallbacks.Deliver(callback, null); return NoCancellation; }
             var key = Key(address);
             bool created = !entries.TryGetValue(key, out var entry);
-            if (!created && entry.Loading && !allowAsync) { AudioCallbacks.Deliver(callback, null); return () => { }; }
-            if (created) { entry = new Entry { Key = key }; entries.Add(key, entry); }
+            // A failed delivery can synchronously retry before its old entry is cleaned up.
+            if (!created && !entry.Loading && entry.Lease?.Clip == null) created = true;
+            if (!created && entry.Loading && !allowAsync) { AudioCallbacks.Deliver(callback, null); return NoCancellation; }
+            if (created) { entry = new Entry { Key = key }; entries[key] = entry; }
             if (group != null) entry.Groups.Add(group);
             else entry.Retained = true;
+            if (!entry.Loading)
+            {
+                // Resident requests have no pending work and need no waiter/list/cancel closure.
+                entry.Users++;
+                AudioCallbacks.Deliver(callback, new AudioClipLease(entry.Lease.Clip, () => { entry.Users--; Cleanup(entry); }));
+                return NoCancellation;
+            }
             var waiter = new Waiter { Callback = callback, Group = group };
             entry.Waiters.Add(waiter);
-            if (!entry.Loading) Deliver(entry);
-            else if (created)
+            if (created)
             {
                 try
                 {
