@@ -17,7 +17,7 @@ namespace Controller.Audio
             public AsyncOperationHandle<AudioClip> Handle;
             public AudioClip Clip;
             public bool Complete, Released;
-            public int Users;
+            public int Users, Deliveries;
             public readonly HashSet<string> CachedAliases = new();
             public readonly List<Request> Waiters = new();
         }
@@ -59,7 +59,7 @@ namespace Controller.Audio
         }
         private void Acquire(string key, bool retain, Action<AudioClipLease> completed)
         {
-            if (destroyed || string.IsNullOrWhiteSpace(key)) { completed?.Invoke(null); return; }
+            if (destroyed || string.IsNullOrWhiteSpace(key)) { AudioCallbacks.Deliver(completed, null); return; }
             var request = new Request { Key = key, Retain = retain, Callback = completed }; requests.Add(request);
             if (aliases.TryGetValue(key, out var cached) && !cached.Released)
             { Join(request, cached); return; }
@@ -101,8 +101,11 @@ namespace Controller.Audio
             op.Complete = true;
             if (op.Handle.IsValid() && op.Handle.Status == AsyncOperationStatus.Succeeded) op.Clip = op.Handle.Result;
             var waiting = op.Waiters.ToArray(); op.Waiters.Clear();
-            foreach (var request in waiting) FinishRequest(request, op);
-            ReleaseIfUnused(op);
+            // A recipient may release its lease before later recipients are notified.
+            // Keep the native operation alive for the entire delivery batch.
+            op.Deliveries++;
+            try { foreach (var request in waiting) FinishRequest(request, op); }
+            finally { op.Deliveries--; ReleaseIfUnused(op); }
         }
         private void FinishRequest(Request request, Operation op)
         {
@@ -116,11 +119,11 @@ namespace Controller.Audio
                 lease = new AudioClipLease(op.Clip, () => { op.Users--; ReleaseIfUnused(op); });
             }
             var callback = request.Callback; request.Callback = null;
-            if (callback != null) callback(lease); else lease?.Dispose();
+            AudioCallbacks.Deliver(callback, lease);
         }
         private void ReleaseIfUnused(Operation op)
         {
-            if (op.Released || op.Users > 0 || op.CachedAliases.Count > 0 || op.Waiters.Exists(r => !r.Finished)) return;
+            if (op.Released || op.Deliveries > 0 || op.Users > 0 || op.CachedAliases.Count > 0 || op.Waiters.Exists(r => !r.Finished)) return;
             op.Released = true; op.Clip = null;
             if (operations.TryGetValue(op.Identity, out var current) && ReferenceEquals(current, op)) operations.Remove(op.Identity);
             var keys = new List<string>(); foreach (var pair in aliases) if (ReferenceEquals(pair.Value, op)) keys.Add(pair.Key);

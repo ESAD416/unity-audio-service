@@ -34,10 +34,10 @@ namespace Controller.Audio
         }
         public Action Request(AudioClipAddress address, bool allowAsync, Action<AudioClipLease> callback, string group = null)
         {
-            if (disposed || !AudioValues.Alive(provider)) { callback(null); return () => { }; }
+            if (disposed || !AudioValues.Alive(provider)) { AudioCallbacks.Deliver(callback, null); return () => { }; }
             var key = Key(address);
             bool created = !entries.TryGetValue(key, out var entry);
-            if (!created && entry.Loading && !allowAsync) { callback(null); return () => { }; }
+            if (!created && entry.Loading && !allowAsync) { AudioCallbacks.Deliver(callback, null); return () => { }; }
             if (created) { entry = new Entry { Key = key }; entries.Add(key, entry); }
             if (group != null) entry.Groups.Add(group);
             else entry.Retained = true;
@@ -99,8 +99,7 @@ namespace Controller.Audio
             }
             foreach (var delivery in deliveries)
             {
-                try { delivery.callback(delivery.lease); }
-                catch (Exception error) { delivery.lease?.Dispose(); Debug.LogException(error); }
+                AudioCallbacks.Deliver(delivery.callback, delivery.lease);
             }
         }
 
@@ -113,12 +112,17 @@ namespace Controller.Audio
         }
         public void ReleaseGroup(string group)
         {
+            var cancelled = new List<Action<AudioClipLease>>();
             foreach (var entry in new List<Entry>(entries.Values))
             {
                 entry.Groups.Remove(group);
-                foreach (var waiter in entry.Waiters.ToArray()) if (waiter.Group == group) { var callback = waiter.Callback; waiter.Callback = null; callback?.Invoke(null); }
+                foreach (var waiter in entry.Waiters)
+                    if (waiter.Group == group && waiter.Callback != null)
+                    { cancelled.Add(waiter.Callback); waiter.Callback = null; }
                 Cleanup(entry);
             }
+            // Snapshot all cancelled requests before callbacks can start new ones.
+            foreach (var callback in cancelled) AudioCallbacks.Deliver(callback, null);
         }
         public void ReleaseUnused()
         {
@@ -129,7 +133,7 @@ namespace Controller.Audio
             disposed = true;
             foreach (var entry in new List<Entry>(entries.Values))
             {
-                foreach (var waiter in entry.Waiters.ToArray()) { var callback = waiter.Callback; waiter.Callback = null; callback?.Invoke(null); }
+                foreach (var waiter in entry.Waiters.ToArray()) { var callback = waiter.Callback; waiter.Callback = null; AudioCallbacks.Deliver(callback, null); }
                 entry.Waiters.Clear(); entry.Groups.Clear(); entry.Retained = false; Cleanup(entry);
             }
             entries.Clear();

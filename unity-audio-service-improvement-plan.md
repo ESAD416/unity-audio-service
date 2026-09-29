@@ -2,9 +2,9 @@
 
 文件日期：2026-09-29
 
-文件版本：1.5
+文件版本：1.6
 
-狀態：第一階段 R1～R6、第二階段 C1～C7 實作及本機 Editor 驗收完成；第三階段尚未開始
+狀態：第一階段及第二階段原驗收完成；第二階段回呼補強驗收完成，效能量測進行中；第三階段尚未開始
 
 本文件整合專案審查、三階段改善目標，以及三個開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。
 
@@ -295,6 +295,30 @@ Unity 自動重新序列化的 `ProjectSettings.asset`／`EditorSettings.asset` 
 
 **尚未驗證／交付：** Addressables content build、Player 建置與實機播放、其他 Unity 版本／平台、長時間壓測及資源預算門檻。UPM 核心／可選依賴分離、發布 CI、授權盤點仍為第三階段。未推送遠端、建立 PR 或發布版本。
 
+### 5.5 第二階段補強：研究發現與執行紀錄（2026-09-29）
+
+基準為 `d10d57d`。原 92 項 PlayMode 通過紀錄保留；後續增加三項獨立重現測試，三項皆失敗，揭露原矩陣未涵蓋的回呼邊界。本節將 Codex 工作區的補充研究結論合併至此主檔，後續決策與驗收以本節為準。
+
+| 項目 | 已重現的問題 | 修正與驗收方向 |
+| --- | --- | --- |
+| R7 | BGM 取消回呼內再次 Play，後續載入完成後仍有 handle 卡在 Loading | 完成內部狀態變更後再通知；驗證 Play／Stop／Shutdown／StealOldest／Provider 切換的回呼重入，不能留下無對應載入的 Loading handle |
+| R8 | 共用 Addressables operation 第一個回呼立即 Dispose，第二個取得 null，native operation 提早 release | 交付期間保留 operation；回呼例外隔離；驗證舊 store 丟棄晚到結果時，新 store 仍可取得素材，最後釋放恰好一次 |
+| R9 | 預載取消回呼拋例外，ReleaseGroup 跳過其餘通知 | 統一安全回呼派送；Shutdown 清理完整，新的預載不被舊群組取消批次捕獲；補設定同步旗標的 finally 還原 |
+
+本機原重現結果：`work/stage-two-review/regressions.xml`，3／3 失敗（2026-09-29 18:14 台北）。補強後測試與量測輸出放在 `work/stage-two-hardening/`；測試仍依既定規則受忽略。
+
+**效能候選與決策順序：** 修正 R7～R9 後，先量 24／64／256 聲源的首次／快取播放、全部停止後的 Tick CPU 與 GC，再決定使用中聲源更新、無限制 MakeRoom 快速路徑及資料預載。現有 Tick 掃描全部歷史建立的聲源、MakeRoom 無限制仍掃 active、快取命中仍配置 Waiter／delivery 容器，是可定位的工作量；尚未量測前不宣告改善幅度。現有五個 mp3 未啟用 preloadAudioData／loadInBackground，資產載入完成不代表音訊資料已準備，須另量首次 AudioSource.Play。Player／packed content 效能仍屬第三階段驗證。
+
+**新增設計參考：** [AudioConductor 的分類／優先序限額](https://github.com/CyberAgentGameEntertainment/AudioConductor#throttle-typethrottle-limit)、[配置驗證](https://github.com/CyberAgentGameEntertainment/AudioConductor#cuesheet-validation) 與 [ID 生成](https://github.com/CyberAgentGameEntertainment/AudioConductor#cue-enum-definition)，可對應重要聲音保護、Catalog 重複／缺失檢查；[LucidAudio SetLink](https://github.com/annulusgames/LucidAudio#setlink)／[Grouping](https://github.com/annulusgames/LucidAudio#grouping) 可參考播放擁有者與播放群組。這輪核對作者 README／API 文件，未驗證其內部實作或效能、未匯入第三方程式碼。
+
+**Unity 一手依據：** [LoadAudioData](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AudioClip.LoadAudioData.html)、[ObjectPool](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Pool.ObjectPool_1.html)、[Audio Profiler](https://docs.unity3d.com/6000.0/Documentation/Manual/ProfilerAudio.html)、[Addressables 2.11 記憶體](https://docs.unity3d.com/Packages/com.unity.addressables@2.11/manual/memory-assets.html)。release 不等於立即卸載；快取保留不直接等同洩漏。優先權／分類預算、播放 owner、Catalog 索引、TTL／LRU、3D、DSP 排程與雙聲源交叉淡化維持獨立候選，不混入可靠性修正。
+
+**可靠性實作：** 新增核心回呼佇列：終態即時更新，通知延至本次內部狀態變更完成後依序派送；回呼新建播放是較新的請求。StealOldest 改迴圈執行，避免通知重入引發遞迴。Addressables 交付批次增加持有保護，失敗回呼不阻斷其他接收者。ReleaseGroup 先固定取消清單，保留回呼中新建的需求；設定旗標用 finally 還原。Shutdown 清理期間拒絕 Initialize，返回後可正常初始化。
+
+**可靠性驗收：** 106／106 PlayMode 全數通過，包含原 92 項與新增 14 項。新增測試涵蓋 R7～R9、Stop 回呼重新播放、取消回呼 Stop／Shutdown、Provider 新世代、StealOldest 回呼重播、Shutdown 回呼 Initialize、群組回呼新增需求、設定事件拋錯、Addressables 第一個回呼例外／取消其餘等待者／store 世代刷新。另兩項無 Domain Reload／無 Domain 與 Scene Reload 重入情境通過；XML 包含 RequiredTest 共 3／3。結果檔為 `reliability.xml` 與 `lifecycle.xml`。
+
+效能量測：待執行。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -460,6 +484,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [ ] 升級後 Addressables content build 與 Player 建置／播放驗證。
 - [x] 第一階段實作與驗收（最終 39／39 PlayMode 測試及 Editor 原場景播放檢查通過，見 4.5）。
 - [x] 第二階段 C1～C7 實作與本機 Editor 驗收（92／92 PlayMode、2 項 Play Mode 重入情境及原場景操作／聲源池基準通過，見 5.4）。
+- [ ] 第二階段補強 R7～R9 與效能量測（見 5.5）。
 - [ ] 第三階段實作與驗收。
 
 ## 12. 原專案與 Unity 技術依據
@@ -484,3 +509,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.3 | 2026-09-29 | 記錄 Unity `6000.6.3f1` 升級後的目前套件版本、兩處 FindAnyObjectByType 修正及 Editor 編譯／Console 驗證；更新工作狀態與後續驗證基準，保留原始審查快照，明列播放、建置與多實例情境尚未驗證 |
 | 1.4 | 2026-09-29 | 完成第一階段 R1～R6、39 項本機回歸與 Editor 原場景播放檢查；記錄結果回傳的可選 Provider 介面、來源／Master 增益及停用語意；更新驗收與仍未驗證範圍 |
 | 1.5 | 2026-09-29 | 完成第二階段 C1～C7：handle、目錄、素材 lease、聲源池、設定／暫停與生命週期；92 項 PlayMode 與 2 項重入情境通過，記錄 Editor 操作、29 聲源重用及 Profiler 基準，明列相容性變更與第三階段界線 |
+| 1.6 | 2026-09-29 | 合併第二階段後續研究、三項已重現的回呼缺陷與新增開源參考；106 項 PlayMode 與 Reload 生命週期驗收通過，效能量測待執行 |

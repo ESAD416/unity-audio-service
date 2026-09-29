@@ -67,9 +67,12 @@ namespace Controller.Audio
         internal void Finish(AudioCompletion result, string reason = null)
         {
             if (IsFinished) return;
+            var owner = Owner;
             State = AudioPlaybackState.Finished; Result = result; FailureReason = reason; Owner = null;
             var subscribers = completed; completed = null;
-            if (subscribers != null) foreach (Action<AudioHandle> callback in subscribers.GetInvocationList()) Invoke(callback);
+            if (subscribers == null) return;
+            void Notify() { foreach (Action<AudioHandle> callback in subscribers.GetInvocationList()) Invoke(callback); }
+            if (owner != null) owner.NotifyCompleted(Notify); else Notify();
         }
         private void Invoke(Action<AudioHandle> callback)
         {

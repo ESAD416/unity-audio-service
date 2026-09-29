@@ -24,6 +24,7 @@ namespace Controller.Audio
         private static object registrationOwner;
         private IAudioClipProvider clipProvider;
         private IAudioSettingsHandler settingsHandler;
+        private bool shuttingDown;
         private bool settingsSubscribed, applyingSettings, mixerApplied, providerSubscribed;
         private readonly float[] volumes = { 1, 1, 1, 1 };
         private readonly bool[] mixerParameters = new bool[4];
@@ -71,7 +72,7 @@ namespace Controller.Audio
         private void OnEnable() { Initialize(); }
         public void Initialize()
         {
-            if (!isActiveAndEnabled) return;
+            if (!isActiveAndEnabled || shuttingDown) return;
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
             if (Ready) return;
@@ -86,7 +87,9 @@ namespace Controller.Audio
         public void Shutdown()
         {
             if (!Ready) return;
-            Ready = false; DetachSettings(); DetachProviderNotifications(); engine?.Shutdown(); StopAllCoroutines();
+            Ready = false; shuttingDown = true;
+            try { DetachSettings(); DetachProviderNotifications(); engine?.Shutdown(); }
+            finally { StopAllCoroutines(); shuttingDown = false; }
         }
         private void OnDisable() { Shutdown(); }
         private void OnDestroy() { Shutdown(); if (Instance == this) Instance = null; }
@@ -258,7 +261,7 @@ namespace Controller.Audio
         public void SetBackgroundPaused(bool paused) => engine?.SetPaused(paused, true);
         public void SetMuted(AudioChannel channel, bool muted) { if ((int)channel >= 0 && (int)channel < 4) engine?.SetMuted(channel, muted); }
         public void Preload(AudioCategory category, AudioId id, string group, Action<bool> completed = null)
-        { if (!Ready || string.IsNullOrWhiteSpace(group) || string.IsNullOrWhiteSpace(id.Value)) { completed?.Invoke(false); return; } engine.Preload(Resolve(category, id), group, completed); }
+        { if (!Ready || string.IsNullOrWhiteSpace(group) || string.IsNullOrWhiteSpace(id.Value)) { AudioCallbacks.Invoke(completed, false); return; } engine.Preload(Resolve(category, id), group, completed); }
         public void ReleaseGroup(string group) { if (!string.IsNullOrWhiteSpace(group)) engine?.ReleaseGroup(group); }
         public void ReleaseUnusedClips() => engine?.ReleaseUnused();
         public bool TryGetCachedClip(AudioCategory category, AudioId id, out AudioClip clip)
@@ -283,14 +286,20 @@ namespace Controller.Audio
             SettingsChanged(AudioChannel.Sfx, settingsHandler.SfxVolume); SettingsChanged(AudioChannel.Voice, settingsHandler.VoiceVolume);
         }
         private void SettingsChanged(AudioChannel channel, float value)
-        { applyingSettings = true; SetVolume(channel, value); applyingSettings = false; }
+        {
+            bool previous = applyingSettings; applyingSettings = true;
+            try { SetVolume(channel, value); } finally { applyingSettings = previous; }
+        }
         public float GetVolume(AudioChannel channel) => (int)channel >= 0 && (int)channel < 4 ? volumes[(int)channel] : 0;
         public void SetMasterVolume(float normalizedVolume) => SetVolume(AudioChannel.Master, normalizedVolume);
         public void SetBgmVolume(float normalizedVolume) => SetVolume(AudioChannel.Bgm, normalizedVolume);
         public void SetSfxVolume(float normalizedVolume) => SetVolume(AudioChannel.Sfx, normalizedVolume);
         public void SetVoiceVolume(float normalizedVolume) => SetVolume(AudioChannel.Voice, normalizedVolume);
         public void ApplyVolume(AudioChannel channel, float value, bool persist = true)
-        { bool previous = applyingSettings; applyingSettings = !persist; SetVolume(channel, value); applyingSettings = previous; }
+        {
+            bool previous = applyingSettings; applyingSettings = !persist;
+            try { SetVolume(channel, value); } finally { applyingSettings = previous; }
+        }
         private void SetVolume(AudioChannel channel, float value)
         {
             int index = (int)channel; if (index < 0 || index > 3) return;

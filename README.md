@@ -51,6 +51,7 @@ voice.Stop(0.2f);
 
 - 狀態為 Loading、Playing、Paused、Finished；結果區分 Completed、Stopped、Cancelled、Failed、Rejected。
 - Loading 中 Stop／被替換／服務關閉得到 Cancelled；播放中主動停止得到 Stopped；自然播完得到 Completed。
+- 終態立即更新；`Completed` 在本次核心狀態變更完成後於主執行緒派送，回呼建立的播放視為新請求。巢狀完成通知依序派送，避免改寫尚未完成的內部轉換。
 - `Completed` 每個訂閱在結束時通知一次。結束後新訂閱會立即收到保留的結果；回呼拋出例外會記錄且不阻止其他訂閱。
 - 結束後 `IsValid` 為 false，控制方法回傳 false；舊 handle 無法控制池中重用的聲源，也不公開 AudioSource。
 - Loading 中 Pause 會記住暫停需求，載入完成後直接保持 Paused。暫停中的 Stop 立即完成，即使有淡出時長；暫停不會被當成自然結束。
@@ -99,6 +100,7 @@ audio.ReleaseGroup("level-1");
 audio.ReleaseUnusedClips();
 ```
 
+- 預載／Provider 回呼的例外會記錄並隔離，不中斷其他等待者。`ReleaseGroup` 只取消呼叫當時的需求，回呼中新建的需求保留。
 - `ReleaseGroup` 取消該群組尚未完成的預載，移除群組保留；不會停止使用中的聲音，也不清除其他群組／普通快取的保留。
 - `ReleaseUnusedClips` 清除普通快取保留；有播放使用者或群組保留時，素材持續有效。
 - 原始 `ReleaseClip` 不會使內建 Provider 的有效 lease 提前失效。Provider 更換／銷毀後，已取得的播放 lease 仍保持到最後使用者離開。
@@ -143,7 +145,7 @@ var handle = audio.PlaySfxHandle("ui.result", new PlayOptions
 
 ## 生命週期與自訂 Provider
 
-Controller 提供 `Initialize()`、`Ready`、`Shutdown()`。停用元件或 GameObject 會停止播放、取消舊載入需求並解除訂閱；重新啟用會重新初始化，需重新發出播放。重複 Prefab、一般／additive 場景及關閉 Domain Reload 的重入已有本機測試。
+Controller 提供 `Initialize()`、`Ready`、`Shutdown()`。Shutdown 回呼期間不接受重新初始化；需等 Shutdown 返回後再 Initialize。停用元件或 GameObject 會停止播放、取消舊載入需求並解除訂閱；重新啟用會重新初始化，需重新發出播放。重複 Prefab、一般／additive 場景及關閉 Domain Reload 的重入已有本機測試。
 
 Bootstrap 以自身作為全域 Provider 註冊擁有者；舊擁有者退訂不會清除後來的註冊。自訂整合可使用 `RegisterClipProvider(provider, owner)`／`UnregisterClipProvider(owner)`。
 
