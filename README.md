@@ -7,8 +7,8 @@
 - Unity `6000.6.3f1`、Addressables `2.11.2`、Unity Test Framework `1.8.0`。
 - Runtime assembly：`Controller.Audio`，目前仍依賴 `Unity.Addressables`／`Unity.ResourceManager`。尚未支援不安裝 Addressables 的獨立核心套件。
 - 已驗證本機 Editor／PlayMode、原始 Prefab／場景、Addressables Editor 資產模式及無 Domain Reload 的 Play Mode 重入。
-- Addressables content build、Player、其他 Unity 版本與平台尚未驗證。不得將 Editor 通過視為已完成部署驗證。
-- 2026-09-30 最新邊界審查：既有 170 項 PlayMode 仍通過，新增 9 項中 7 項失敗，確認 Provider 釋放重入／例外、外部 AudioListener 暫停、音訊配置重設與 Addressables 對應刷新五類待修問題。觸發條件、限制及證據見[改善計劃第 5.11 節](unity-audio-service-improvement-plan.md)；本輪尚未修正正式程式。
+- 2026-09-30：R11～R15 五類缺陷已修正，完整 PlayMode **205／205**、本專案 EditMode／Reload **14／14**、macOS Standalone Player 選定回歸 **78／78** 通過。涵蓋實際 packed clip 的 address／GUID 共用、HTTP catalog／AssetBundle 更新，以及程式觸發 AudioSettings.Reset。
+- Player 以無圖形模式執行；其他 Unity 版本／平台、圖形 Player 正常呈現與實體耳機拔插尚未完成驗證。修正、量測與驗收界線見[改善計劃第 5.12 節](unity-audio-service-improvement-plan.md)。
 
 ## 快速導入
 
@@ -52,7 +52,7 @@ voice.Stop(0.2f);
 
 - 狀態為 Loading、Playing、Paused、Finished；結果區分 Completed、Stopped、Cancelled、Failed、Rejected。
 - Loading 中 Stop／被替換／服務關閉得到 Cancelled；播放中主動停止得到 Stopped；自然播完得到 Completed。
-- 終態立即更新；`Completed` 在本次核心狀態變更完成後於主執行緒派送，回呼建立的播放視為新請求。巢狀完成通知依序派送，避免改寫尚未完成的內部轉換。
+- 終態、名額及聲源清理立即更新；Provider lease 的實際釋放與 `Completed` 通知在本次核心狀態變更完成後於主執行緒派送。釋放動作或完成回呼再次 Play／Shutdown 時，會看到已完成的內部狀態；新請求仍遵守並發上限。
 - `Completed` 每個訂閱在結束時通知一次。結束後新訂閱會立即收到保留的結果；回呼拋出例外會記錄且不阻止其他訂閱。
 - 結束後 `IsValid` 為 false，控制方法回傳 false；舊 handle 無法控制池中重用的聲源，也不公開 AudioSource。
 - Loading 中 Pause 會記住暫停需求，載入完成後直接保持 Paused。暫停中的 Stop 立即完成，即使有淡出時長；暫停不會被當成自然結束。
@@ -89,6 +89,8 @@ Fallback 有兩個明確政策：
 
 改變 Fallback 的 Policy／Configure 會通知服務，取消舊待播放請求並建立新快取世代；已播放的舊素材保留到播放結束。更換 Catalog 也會刷新；直接修改同一 Catalog 的 Entries、ID 或 Aliases 後，呼叫 `RefreshClipProvider()` 重建索引並使舊素材快取失效。新索引會先建立，再發出取消通知，回呼內的新播放會使用更新後的映射。
 
+`Addressables.UpdateCatalogs` 成功後，呼叫 `audio.RefreshClipProvider()`，使服務及內建 Addressables Provider 一起重新解析 key。刷新會取消舊等待請求、清除定位與別名快取；舊世代已發出的 lease 持續有效，晚到的載入結果不能回填新世代。Fallback 會向支援刷新介面的主／備來源轉送一次，不遞迴發送 Changed。若要讓新舊 AssetBundle 同時使用，仍須配置相應的 Addressables 更新策略；本機更新測試使用 `UniqueBundleIds=true`，本 API 不會替專案修改建置設定。
+
 Controller 初始化／重新啟用也會重建索引。直接使用 `AudioCatalog.TryResolve()` 時，首次查詢、Entries 陣列替換或 Unity 編輯／反序列化後會自動重建；程式直接修改既有 entry／alias 內容後須呼叫 `RebuildIndex()`。服務使用中的 Catalog 應使用上述 `RefreshClipProvider()`，才能一起處理待載入請求與快取。索引需要額外管理記憶體，重建有配置成本，適合在初始化或資料更新時執行。
 
 `TryGetCachedClip` 是純快取查詢，不發起載入。Resources 的舊 `TryGetClip` 仍可能同步載入。`AllowAsyncLoad=false` 不等待進行中的載入：Resources 可同步取得，Addressables 只使用已駐留素材，且取得獨立持有權。
@@ -119,7 +121,7 @@ audio.ReleaseUnusedClips();
 `Preload` 成功只保證取得並保留 AudioClip 資產；`PrepareClip` 另外呼叫需要的 `LoadAudioData`，成功回呼時 `loadState == Loaded`。兩者均在主執行緒呼叫，完成回呼可能同步發生；背景載入由匯入設定決定。`PrepareClip` 不保證播放端到端延遲或 Streaming 全曲已解碼，也不修改音檔匯入設定。準備成本與記憶體仍存在，適合在載入畫面對即將使用的素材執行。
 
 - `PrepareClip` 的失敗、群組取消、Provider 世代切換及 Shutdown 都回呼 false 一次；取消服務端等待不會中止 Unity 已啟動的底層載入。成功後由群組持有，普通快取／播放亦可能延長持有時間。服務不主動呼叫 `UnloadAudioData`，避免影響共用同一 clip 的外部使用者。
-- 預載／Provider 回呼的例外會記錄並隔離，不中斷其他等待者。`ReleaseGroup` 只取消呼叫當時的需求，回呼中新建的需求保留。
+- 預載／Provider 回呼及 lease release 的例外會記錄並隔離，不中斷其他等待者或必要清理。Provider 自己釋放失敗的資源仍由該 Provider 負責；服務保障 handle、聲源與持有計數不因例外卡在半完成狀態。`ReleaseGroup` 只取消呼叫當時的需求，回呼中新建的需求保留。
 - `ReleaseGroup` 取消該群組尚未完成的預載與資料準備，移除群組保留；不會停止使用中的聲音，也不清除其他群組／普通快取的保留。
 - `ReleaseUnusedClips` 清除普通快取保留；有播放使用者或群組保留時，素材持續有效。
 - 原始 `ReleaseClip` 不會使內建 Provider 的有效 lease 提前失效。Provider 更換／銷毀後，已取得的播放 lease 仍保持到最後使用者離開。
@@ -156,13 +158,23 @@ int created = audio.PrewarmSources(32);
 
 未呼叫時不額外預熱。`PrewarmSources` 同步建立閒置聲源與預留播放清單容量，不播放或載入 clip、不改 `MaxVoices`；非正數或服務尚未 Ready 時回傳 0，不自動啟動服務。較小目標不縮池，播放需求超過預熱容量時仍按需擴充。預熱會提前保留物件與記憶體，動態聲源在 Shutdown 清理；若重新 Initialize，需要時再預熱。素材準備使用 `PrepareClip`，聲源預熱本身不保證首次播放延遲。
 
+可在換場或載入階段明確縮減閒置聲源：
+
+```csharp
+int removed = audio.TrimIdleSources(minimumCapacity: 32, maxToRemove: 16);
+// 每次最多移除 16 個閒置動態聲源；動態總容量不因縮池降到 32 以下。
+```
+
+`minimumCapacity` 與預熱一樣指動態總容量（使用中＋閒置），不是保留的閒置數量。只處理池中的閒置動態聲源，不停止播放、不動暫停／載入預約，也不刪除五個相容聲源。負數最低容量視為 0；非正數移除預算或服務未 Ready 回傳 0。回傳本次移出池的數量，Unity 實際 Destroy 在幀末完成；預設每次最多 32 個，不自動縮池。後續可重新預熱，或由播放按需擴充；請考量重建成本。
+
 - `SetGamePaused(true)` 暫停一般播放；`IgnoreGamePause=true` 的 UI 聲音略過此原因。
-- 個別 `handle.Pause()` 的原因獨立保存，解除遊戲暫停不會擅自恢復個別暫停。
+- 外部 `AudioListener.pause` 亦列入暫停原因，在服務更新、載入完成或 handle 暫停／停止時同步；不再把 one-shot 誤判為播完。`IgnoreGamePause=true` 同時略過遊戲與 Listener 暫停。
+- 個別 `handle.Pause()` 的原因獨立保存，解除遊戲／Listener 暫停不會擅自恢復個別暫停。暫停期間單次播放的淡入淡出凍結；分類／分支的共用增益淡變仍維持原有行為。
 - `SetBackgroundPaused`／預設啟用的 `pauseOnBackground` 適用全部播放，包括 UI。
 - `SetMuted(channel, true)` 只抑制輸出，不停播、不改 PlayerPrefs；`Time.timeScale=0` 本身不等於音訊暫停，遊戲需明確呼叫服務。
 - 重複設定相同的遊戲／背景暫停或同通道靜音會直接返回；新播放、載入完成與重用聲源仍套用目前狀態。
 
-並發檢查通過後才建立設定快照、播放資料及所需載入回呼。一般入口僅有全域限制時直接使用現有播放數量；單音效限制與替換分支仍完整檢查。拒絕仍回傳獨立 handle，保留 ID、原因與晚訂閱通知。效能測點與限制見改善計畫 §5.10。
+並發檢查通過後才建立設定快照、播放資料及所需載入回呼。一般入口僅有全域限制時直接使用現有播放數量；一般單音效限制首次使用時建立分類＋ID 計數索引，包含 Playing／Paused／Loading，之後隨接納與結束更新；空場後停止維護，需要時再建立。BGM／Voice 替換分支保留排除被替換槽的完整檢查，StealOldest 仍依原先順序選取。拒絕仍回傳獨立 handle，保留 ID、原因與晚訂閱通知。效能測點與成本見改善計畫 §5.10、§5.12。
 
 ## 音量與設定
 
@@ -182,6 +194,13 @@ int created = audio.PrewarmSources(32);
 
 Controller 提供 `Initialize()`、`Ready`、`Shutdown()`。Shutdown 回呼期間不接受重新初始化；需等 Shutdown 返回後再 Initialize。停用元件或 GameObject 會停止播放、取消舊載入需求並解除訂閱；重新啟用會重新初始化，需重新發出播放。重複 Prefab、一般／additive 場景及關閉 Domain Reload 的重入已有本機測試。
 
+收到 `AudioSettings.OnAudioConfigurationChanged`（包含程式 Reset 或裝置變更通知）時，服務採以下政策：
+
+- 已 Playing／Paused 的 handle 結束為 **Failed**；尚在 Loading 的請求結束為 **Cancelled**，原因為 `Audio system configuration changed`，完成通知各一次。
+- 取消尚未完成的預載／資料準備，回呼 false；清除舊服務快取及群組保留，停止舊淡變。需要的素材群組應重新預載／準備。
+- 重套 Mixer 路由與音量，保留玩家設定、遊戲／背景暫停、靜音及目前分類／分支增益；不自動續播 BGM。個別 handle 已結束，其個別暫停不移轉到新 handle。
+- 呼叫端可在完成通知中重新播放。若傳入腳本建立且已被重設失效的 AudioClip，須先由擁有者重建素材。
+
 Bootstrap 以自身作為全域 Provider 註冊擁有者；舊擁有者退訂不會清除後來的註冊。自訂整合可使用 `RegisterClipProvider(provider, owner)`／`UnregisterClipProvider(owner)`。
 
 既有 `IAudioClipProvider`、`IAsyncAudioClipProvider`、`IResultAudioClipProvider` 均保留。需要明確安全持有時，建議實作：
@@ -192,11 +211,12 @@ Bootstrap 以自身作為全域 Provider 註冊擁有者；舊擁有者退訂不
 | `IAudioClipLeaseProvider` | `AcquireClip(address, callback)` 正常完成恰好回呼一次；失敗 null；成功 lease 到 Dispose 前保持素材有效 |
 | `IAudioSynchronousClipProvider` | 明確的同步取得，回傳 lease；不能偷偷等待非同步結果 |
 | `IAudioClipProviderChanges` | Provider 政策／映射變更時發送 Changed，使服務取消舊需求及更新快取世代 |
+| `IAudioClipProviderRefresh` | 可選的 `RefreshClipLookup()`：在主執行緒使定位快取失效，取消舊取得請求，先公布新查找狀態再通知；保留已發出 lease，方法內不得再發送 Changed |
 
 舊 Provider 的 coroutine／巢狀 enumerator 例外會轉為載入失敗。未提供 lease 契約的外部 Provider，仍需自己協調服務以外的使用者與 ReleaseClip，服務無法替未知外部持有者計數。正式程式不引用本機測試或工具。
 
 ## 診斷與驗證
 
-`Diagnostics` 提供 Playing、Paused、Loading、PooledSources、CreatedSources、CachedClips、ClipUsers、PendingLoads、PreparingClips 與 LastFailure。`PreparingClips` 包含等待資產或音訊資料的準備需求，`PendingLoads` 僅計服務資產載入。快取統計指目前 Provider 世代的服務快取；切換後仍在播放的舊 lease 會保持有效，但不列入新世代快取統計。`verboseLogging` 可開關額外日誌。
+`Diagnostics` 提供 Playing、Paused、Loading、PooledSources、CreatedSources、CachedClips、ClipUsers、PendingLoads、PreparingClips 與 LastFailure。服務 Ready 時，`CreatedSources` 是目前持有的聲源數（含五個相容聲源），不是累計建立次數；縮池後會下降。`PreparingClips` 包含等待資產或音訊資料的準備需求，`PendingLoads` 僅計服務資產載入。快取統計指目前 Provider 世代的服務快取；切換後仍在播放的舊 lease 會保持有效，但不列入新世代快取統計。Addressables Provider 的 `CachedOperationCount` 也只計目前世代，舊 lease 仍可能持有舊 native operation。`verboseLogging` 可開關額外日誌。
 
-原第二階段驗收見 [改善計畫 §5.4](unity-audio-service-improvement-plan.md#54-第二階段實作與驗收紀錄)，後續修正與效能前後量測見同文件 §5.5；音量去重、Catalog 索引／驗證與 2026-09-30 驗收見 §5.7，相容性變更見 [CHANGELOG](CHANGELOG.md)。本機測試位於受忽略的 `Assets/AudioService/Tests/`；重跑工具在 `Tools/AudioService/`，XML／Profiler 操作紀錄在 `work/stage-two/`、`work/stage-two-hardening/` 與 `work/core-optimization-20260930/`，均不隨 Git 發布。
+原第二階段驗收見 [改善計畫 §5.4](unity-audio-service-improvement-plan.md#54-第二階段實作與驗收紀錄)，後續修正與效能前後量測見同文件 §5.5；音量去重、Catalog 索引／驗證與 2026-09-30 驗收見 §5.7，R11～R15、計數索引／縮池與 macOS Player 驗收見 §5.12，相容性變更見 [CHANGELOG](CHANGELOG.md)。本機測試位於受忽略的 `Assets/AudioService/Tests/`；重跑工具在 `Tools/AudioService/`，XML／Profiler 操作紀錄在 `work/stage-two/`、`work/stage-two-hardening/`、`work/core-optimization-20260930/` 與 `work/reliability-repair-20260930/`，均不隨 Git 發布。

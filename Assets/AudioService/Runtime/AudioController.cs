@@ -67,7 +67,7 @@ namespace Controller.Audio
         {
             // Publish new lookup data before cancellation callbacks can request playback.
             if (catalog != null) catalog.RebuildIndex();
-            if (Ready) engine?.SetProvider(clipProvider, true);
+            if (Ready) engine?.SetProvider(clipProvider, true, true);
         }
         private void AttachProviderNotifications()
         { if (Ready && !providerSubscribed && clipProvider is IAudioClipProviderChanges changes) { changes.Changed += RefreshClipProvider; providerSubscribed = true; } }
@@ -80,7 +80,7 @@ namespace Controller.Audio
             if (!isActiveAndEnabled || shuttingDown) return;
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
-            if (Ready) return;
+            if (Ready) { AttachAudioConfiguration(); return; }
             if (transform.parent == null) DontDestroyOnLoad(gameObject);
             if (catalog != null) catalog.RebuildIndex();
             if (!AudioValues.Alive(clipProvider)) clipProvider = AudioValues.Alive(globalProvider) ? globalProvider : null;
@@ -88,13 +88,30 @@ namespace Controller.Audio
             Ready = true;
             engine = new AudioPlaybackEngine(this, new[] { _bgmSource, _sfxSource, _sfxLoopSource, _voiceSource, _voiceLoopSource }, clipProvider)
             { MaxVoices = maxVoices, ConcurrencyPolicy = concurrencyPolicy };
-            mixerApplied = false; AttachSettings(); AttachProviderNotifications();
+            mixerApplied = false; AttachSettings(); AttachProviderNotifications(); AttachAudioConfiguration();
+        }
+        private void AttachAudioConfiguration()
+        {
+            AudioSettings.OnAudioConfigurationChanged -= OnAudioConfigurationChanged;
+            AudioSettings.OnAudioConfigurationChanged += OnAudioConfigurationChanged;
+        }
+        private void OnAudioConfigurationChanged(bool deviceWasChanged)
+        {
+            if (!Ready || engine == null) return;
+            using var mutation = engine.BeginMutation();
+            InitializeMixer();
+            engine.AudioConfigurationChanged();
+            ApplyMixerSettings(); ValidateMixer();
         }
         public void Shutdown()
         {
             if (!Ready) return;
             Ready = false; shuttingDown = true;
-            try { DetachSettings(); DetachProviderNotifications(); engine?.Shutdown(); }
+            try
+            {
+                AudioSettings.OnAudioConfigurationChanged -= OnAudioConfigurationChanged;
+                DetachSettings(); DetachProviderNotifications(); engine?.Shutdown();
+            }
             finally { StopAllCoroutines(); shuttingDown = false; }
         }
         private void OnDisable() { Shutdown(); }
@@ -270,6 +287,11 @@ namespace Controller.Audio
         /// Excludes the five legacy sources. Returns sources created; nonpositive targets or an unready service return zero.
         /// Call during loading: this creates objects synchronously, without loading clips or changing voice limits.</summary>
         public int PrewarmSources(int targetCount) => Ready && engine != null ? engine.PrewarmSources(targetCount) : 0;
+        /// <summary>Remove at most maxToRemove idle dynamic sources while retaining
+        /// minimumCapacity total dynamic sources (active + idle). Never removes active,
+        /// loading or legacy sources. Native destruction completes at the end of the frame.</summary>
+        public int TrimIdleSources(int minimumCapacity = 0, int maxToRemove = 32)
+            => Ready && engine != null ? engine.TrimIdleSources(minimumCapacity, maxToRemove) : 0;
         public void Preload(AudioCategory category, AudioId id, string group, Action<bool> completed = null)
         { if (!Ready || string.IsNullOrWhiteSpace(group) || string.IsNullOrWhiteSpace(id.Value)) { AudioCallbacks.Invoke(completed, false); return; } engine.Preload(Resolve(category, id), group, completed); }
         /// <summary>Retain a clip in a group and complete when Unity reports its audio data loaded.

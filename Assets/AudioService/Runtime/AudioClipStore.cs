@@ -21,11 +21,13 @@ namespace Controller.Audio
         private readonly Dictionary<(AudioCategory, string), Entry> entries = new();
         private readonly MonoBehaviour host;
         private readonly IAudioClipProvider provider;
+        private readonly AudioCallbackQueue callbacks;
         private bool disposed;
         public int CachedCount { get { int n = 0; foreach (var e in entries.Values) if (e.Lease?.Clip != null) n++; return n; } }
         public int UserCount { get { int n = 0; foreach (var e in entries.Values) n += e.Users; return n; } }
         public int LoadingCount { get { int n = 0; foreach (var e in entries.Values) if (e.Loading) n++; return n; } }
-        public AudioClipStore(MonoBehaviour host, IAudioClipProvider provider) { this.host = host; this.provider = provider; }
+        public AudioClipStore(MonoBehaviour host, IAudioClipProvider provider, AudioCallbackQueue callbacks)
+        { this.host = host; this.provider = provider; this.callbacks = callbacks; }
         private static (AudioCategory, string) Key(AudioClipAddress address) => (address.Category, address.Id);
         public bool TryGetCached(AudioClipAddress address, out AudioClip clip)
         {
@@ -35,6 +37,7 @@ namespace Controller.Audio
         }
         public Action Request(AudioClipAddress address, bool allowAsync, Action<AudioClipLease> callback, string group = null)
         {
+            using var mutation = callbacks.Begin();
             if (disposed || !AudioValues.Alive(provider)) { AudioCallbacks.Deliver(callback, null); return NoCancellation; }
             var key = Key(address);
             bool created = !entries.TryGetValue(key, out var entry);
@@ -83,9 +86,10 @@ namespace Controller.Audio
         }
         private void Complete(Entry entry, AudioClipLease result)
         {
-            if (!entry.Loading) { result?.Dispose(); return; }
+            using var mutation = callbacks.Begin();
+            if (!entry.Loading) { callbacks.Release(result); return; }
             entry.Loading = false; entry.Lease = result;
-            if (disposed) { result?.Dispose(); entry.Lease = null; return; }
+            if (disposed) { entry.Lease = null; callbacks.Release(result); return; }
             Deliver(entry); Cleanup(entry);
         }
         private void Deliver(Entry entry)
@@ -117,10 +121,12 @@ namespace Controller.Audio
             if (entry.Loading || entry.Users > 0) return;
             if (!disposed && entry.Lease?.Clip != null && (entry.Retained || entry.Groups.Count > 0)) return;
             if (entries.TryGetValue(entry.Key, out var current) && ReferenceEquals(entry, current)) entries.Remove(entry.Key);
-            entry.Lease?.Dispose(); entry.Lease = null;
+            var lease = entry.Lease; entry.Lease = null;
+            callbacks.Release(lease);
         }
         public void ReleaseGroup(string group)
         {
+            using var mutation = callbacks.Begin();
             var cancelled = new List<Action<AudioClipLease>>();
             foreach (var entry in new List<Entry>(entries.Values))
             {
@@ -135,10 +141,12 @@ namespace Controller.Audio
         }
         public void ReleaseUnused()
         {
+            using var mutation = callbacks.Begin();
             foreach (var entry in new List<Entry>(entries.Values)) { entry.Retained = false; Cleanup(entry); }
         }
         public void Dispose()
         {
+            using var mutation = callbacks.Begin();
             disposed = true;
             foreach (var entry in new List<Entry>(entries.Values))
             {

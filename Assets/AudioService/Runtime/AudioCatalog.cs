@@ -103,6 +103,14 @@ namespace Controller.Audio
         event Action Changed;
     }
 
+    /// <summary>Optional main-thread lookup invalidation. Keep issued leases valid,
+    /// cancel old acquisitions, and publish fresh lookups before notifying callers.
+    /// This method must not raise IAudioClipProviderChanges.Changed.</summary>
+    public interface IAudioClipProviderRefresh
+    {
+        void RefreshClipLookup();
+    }
+
     // Explicit cache queries never cause Resources.Load or Addressables.LoadAssetAsync.
     public interface IAudioClipCache
     {

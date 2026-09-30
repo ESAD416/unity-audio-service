@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace Controller.Audio
 {
-    public class FallbackAudioClipProvider : MonoBehaviour, IResultAudioClipProvider, IAudioClipLeaseProvider, IAudioSynchronousClipProvider, IAudioClipProviderChanges
+    public class FallbackAudioClipProvider : MonoBehaviour, IResultAudioClipProvider, IAudioClipLeaseProvider, IAudioSynchronousClipProvider, IAudioClipProviderChanges, IAudioClipProviderRefresh
     {
         [SerializeField] private MonoBehaviour mainProvider;
         [SerializeField] private MonoBehaviour backupProvider;
@@ -12,6 +12,7 @@ namespace Controller.Audio
         private IAudioClipProvider main, backup;
         private int generation;
         private readonly System.Collections.Generic.List<Action> cancellations = new();
+        private readonly AudioCallbackQueue callbacks = new();
         public event Action Changed;
         public AudioFallbackPolicy Policy
         { get => policy; set { if (policy == value) return; policy = value; generation++; Changed?.Invoke(); } }
@@ -54,15 +55,19 @@ namespace Controller.Audio
         }
         public void AcquireClip(AudioClipAddress address, Action<AudioClipLease> completed)
         {
+            using var mutation = callbacks.Begin();
             int version = generation;
             bool finished = false;
             Action cancel = null;
             bool Valid() => !finished && this != null && generation == version;
             void Finish(AudioClipLease lease)
             {
-                if (finished) { lease?.Dispose(); return; }
-                if (!Valid()) { lease?.Dispose(); lease = null; }
-                finished = true; cancellations.Remove(cancel); completed(lease);
+                using var delivery = callbacks.Begin();
+                if (finished) { callbacks.Release(lease); return; }
+                bool valid = Valid();
+                finished = true; cancellations.Remove(cancel);
+                if (!valid) { callbacks.Release(lease); lease = null; }
+                callbacks.Enqueue(() => AudioCallbacks.Deliver(completed, lease));
             }
             cancel = () => Finish(null); cancellations.Add(cancel);
             void LoadMain()
@@ -70,10 +75,10 @@ namespace Controller.Audio
                 var primary = main;
                 Acquire(primary, address, lease =>
                 {
-                    if (!AudioValues.Alive(primary)) { lease?.Dispose(); lease = null; }
-                    if (!Valid()) { lease?.Dispose(); Finish(null); }
+                    if (!AudioValues.Alive(primary)) { AudioCallbacks.Dispose(lease); lease = null; }
+                    if (!Valid()) Finish(lease);
                     else if (lease?.Clip != null) Finish(lease);
-                    else { lease?.Dispose(); Acquire(backup, address, Finish); }
+                    else { AudioCallbacks.Dispose(lease); Acquire(backup, address, Finish); }
                 });
             }
             if (policy == AudioFallbackPolicy.PreferAvailable)
@@ -81,7 +86,7 @@ namespace Controller.Audio
                 if (Cached(main, address.Category, address.AddressablesKey ?? address.Id, out _)) { Acquire(main, address, Finish); return; }
                 // Resources.Load is an explicit load here, never disguised as a cache probe.
                 if (AudioValues.Alive(backup) && (backup is ResourcesAudioClipProvider || Cached(backup, address.Category, address.ResourcesKey ?? address.Id, out _)))
-                { Acquire(backup, address, lease => { if (lease?.Clip != null) Finish(lease); else { lease?.Dispose(); if (Valid()) LoadMain(); else Finish(null); } }); return; }
+                { Acquire(backup, address, lease => { if (lease?.Clip != null) Finish(lease); else { AudioCallbacks.Dispose(lease); if (Valid()) LoadMain(); else Finish(null); } }); return; }
             }
             LoadMain();
         }
@@ -101,15 +106,28 @@ namespace Controller.Audio
             var clip = lease?.Clip;
             if (clip != null && AudioValues.Alive(main) && main is IAsyncAudioClipProvider async && async.IsCached(category, key))
                 yield return async.LoadClipAsync(category, key);
-            completed?.Invoke(clip); lease?.Dispose();
+            try { AudioCallbacks.Invoke(completed, clip); }
+            finally { AudioCallbacks.Dispose(lease); }
         }
         public void ReleaseClip(AudioCategory category, string key)
         {
             if (AudioValues.Alive(main) && main is IAsyncAudioClipProvider a) a.ReleaseClip(category, key);
             if (AudioValues.Alive(backup) && backup is IAsyncAudioClipProvider b) b.ReleaseClip(category, key);
         }
-        private void OnDisable()
-        { generation++; foreach (var cancel in cancellations.ToArray()) cancel(); cancellations.Clear(); }
+        public void RefreshClipLookup()
+        {
+            using var mutation = callbacks.Begin();
+            CancelPending();
+            if (AudioValues.Alive(main) && main is IAudioClipProviderRefresh primary) AudioCallbacks.Invoke(primary.RefreshClipLookup);
+            if (!ReferenceEquals(main, backup) && AudioValues.Alive(backup) && backup is IAudioClipProviderRefresh secondary) AudioCallbacks.Invoke(secondary.RefreshClipLookup);
+        }
+        private void CancelPending()
+        {
+            generation++;
+            var pending = cancellations.ToArray(); cancellations.Clear();
+            foreach (var cancel in pending) AudioCallbacks.Invoke(cancel);
+        }
+        private void OnDisable() { using var mutation = callbacks.Begin(); CancelPending(); }
         private void OnDestroy() => OnDisable();
     }
 }

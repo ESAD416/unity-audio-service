@@ -44,8 +44,11 @@ namespace Controller.Audio
         private readonly List<Preparation> preparations = new();
         private readonly AudioCallbackQueue callbacks = new();
         internal void NotifyCompleted(Action callback) => callbacks.Enqueue(callback);
+        internal AudioCallbackQueue.Scope BeginMutation() => callbacks.Begin();
         private readonly AudioController host;
         private readonly List<Playback> active = new();
+        private Dictionary<(AudioCategory, AudioId), int> audioCounts;
+        private bool audioCountsActive;
         private readonly List<Emitter> emitters = new();
         private readonly List<Emitter> updating = new();
         private readonly Stack<Emitter> pool = new();
@@ -56,7 +59,7 @@ namespace Controller.Audio
         private readonly Tween[] busTweens = new Tween[4];
         private readonly bool[] muted = new bool[4];
         private long nextId;
-        private bool disposed, gamePaused, backgroundPaused;
+        private bool disposed, gamePaused, backgroundPaused, listenerPaused;
         private AudioClipStore store;
         private IAudioClipProvider provider;
         public string LastFailure { get; private set; }
@@ -66,11 +69,12 @@ namespace Controller.Audio
         public AudioPlaybackEngine(AudioController host, AudioSource[] sources, IAudioClipProvider provider)
         {
             this.host = host;
+            listenerPaused = AudioListener.pause;
             for (int i = 0; i < sources.Length; i++)
             { reserved[i] = new Emitter { Source = sources[i], Bank = i, Reserved = true }; emitters.Add(reserved[i]); }
             SetProvider(provider);
         }
-        public void SetProvider(IAudioClipProvider next, bool force = false)
+        public void SetProvider(IAudioClipProvider next, bool force = false, bool refreshLookup = false)
         {
             using var mutation = callbacks.Begin();
             if (!force && ReferenceEquals(provider, next) && store != null) return;
@@ -78,12 +82,46 @@ namespace Controller.Audio
             // Publish the new generation before cancellation callbacks can request work.
             var previousStore = store;
             var previousRequests = active.ToArray();
-            provider = next; store = new AudioClipStore(host, provider);
+            provider = next; store = new AudioClipStore(host, provider, callbacks);
             foreach (var playback in previousRequests) if (playback.Handle.State == AudioPlaybackState.Loading) Finish(playback, AudioCompletion.Cancelled);
             foreach (var preparation in preparations.ToArray()) FinishPreparation(preparation, false);
             previousStore?.Dispose();
+            if (refreshLookup && AudioValues.Alive(next) && next is IAudioClipProviderRefresh refreshable)
+                AudioCallbacks.Invoke(refreshable.RefreshClipLookup);
         }
         private Playback Find(AudioHandle handle) => active.Find(p => ReferenceEquals(p.Handle, handle));
+        private int CountAudio(AudioHandle handle)
+        {
+            // Build only when a per-audio limit is used. Keep ordinary unlimited
+            // sessions free of index maintenance, including after a busy scene ends.
+            if (!audioCountsActive)
+            {
+                audioCounts ??= new Dictionary<(AudioCategory, AudioId), int>();
+                audioCounts.Clear();
+                foreach (var p in active) IncrementAudio(p.Handle);
+                audioCountsActive = true;
+            }
+            audioCounts.TryGetValue((handle.Category, handle.AudioId), out int count);
+            return count;
+        }
+        private void IncrementAudio(AudioHandle handle)
+        {
+            var key = (handle.Category, handle.AudioId);
+            audioCounts.TryGetValue(key, out int count); audioCounts[key] = count + 1;
+        }
+        private void AddActive(Playback playback)
+        {
+            active.Add(playback);
+            if (audioCountsActive) IncrementAudio(playback.Handle);
+        }
+        private void RemoveActive(Playback playback)
+        {
+            if (!active.Remove(playback) || !audioCountsActive) return;
+            var key = (playback.Handle.Category, playback.Handle.AudioId);
+            int remaining = audioCounts[key] - 1;
+            if (remaining == 0) audioCounts.Remove(key); else audioCounts[key] = remaining;
+            if (active.Count == 0) audioCountsActive = false;
+        }
         private Emitter CreateEmitter()
         {
             var go = new GameObject("AudioEmitter"); go.transform.SetParent(host.transform, false);
@@ -105,6 +143,19 @@ namespace Controller.Audio
             if (active.Capacity < emitters.Count) active.Capacity = emitters.Count;
             if (updating.Capacity < emitters.Count) updating.Capacity = emitters.Count;
             return missing;
+        }
+        public int TrimIdleSources(int minimumCapacity, int maxToRemove)
+        {
+            if (disposed || !host.Ready || maxToRemove <= 0) return 0;
+            minimumCapacity = Mathf.Max(0, minimumCapacity);
+            int removed = 0;
+            while (removed < maxToRemove && pool.Count > 0 && emitters.Count - reserved.Length > minimumCapacity)
+            {
+                var emitter = pool.Pop(); emitter.InPool = false;
+                emitters.Remove(emitter); removed++;
+                UnityEngine.Object.Destroy(emitter.Source.gameObject);
+            }
+            return removed;
         }
         private Emitter Rent(int bank)
         {
@@ -168,7 +219,7 @@ namespace Controller.Audio
                 if (slot.Pending != null) Finish(slot.Pending, AudioCompletion.Cancelled);
                 slot.Transition = null; slot.Envelope = 1; bankTweens[bank] = null;
             }
-            active.Add(playback);
+            AddActive(playback);
             if (bank != 1)
             {
                 var emitter = Rent(bank); playback.Emitter = emitter; emitter.Pending = playback;
@@ -189,9 +240,9 @@ namespace Controller.Audio
             if (MaxVoices <= 0 && maxInstances <= 0) return true;
             bool replacesBank = bank >= 0 && bank != 1;
             int count = active.Count, same = 0;
-            // Ordinary global-only requests already have an exact count, including
-            // Loading and Paused. Replacement banks and per-audio limits still scan.
-            if (replacesBank || maxInstances > 0)
+            // Replacement banks exclude their current/pending requests; retain
+            // their scan. Ordinary requests can count Loading/Paused via the index.
+            if (replacesBank)
             {
                 count = 0;
                 foreach (var p in active)
@@ -201,6 +252,7 @@ namespace Controller.Audio
                     if (maxInstances > 0 && SameAudio(p, incoming)) same++;
                 }
             }
+            else if (maxInstances > 0) same = CountAudio(incoming);
             // Decide every limit before stopping anything. Per-audio evictions also
             // free global capacity; lowered limits may require more than one victim.
             int soundVictims = maxInstances > 0 ? Mathf.Max(0, same - maxInstances + 1) : 0;
@@ -232,14 +284,15 @@ namespace Controller.Audio
         private void Loaded(Playback playback, AudioClipLease lease)
         {
             using var mutation = callbacks.Begin();
-            if (disposed || playback.Handle.IsFinished) { lease?.Dispose(); return; }
+            if (disposed || playback.Handle.IsFinished) { AudioCallbacks.Dispose(lease); return; }
+            SyncListenerPause();
             playback.CancelLoad = null;
-            if (lease?.Clip == null) { lease?.Dispose(); Finish(playback, AudioCompletion.Failed, "Clip load failed: " + playback.Handle.AudioId); return; }
+            if (lease?.Clip == null) { AudioCallbacks.Dispose(lease); Finish(playback, AudioCompletion.Failed, "Clip load failed: " + playback.Handle.AudioId); return; }
             playback.Lease = lease;
             if (playback.Emitter == null)
             {
                 var primary = reserved[1];
-                if (primary.Current != null && primary.Current.Handle.State == AudioPlaybackState.Playing && !primary.Source.isPlaying)
+                if (primary.Current != null && primary.Current.Handle.State == AudioPlaybackState.Playing && !Paused(primary.Current) && !primary.Source.isPlaying)
                     Finish(primary.Current, AudioCompletion.Completed);
                 playback.Emitter = Rent(playback.Bank); playback.Emitter.Pending = playback;
             }
@@ -271,23 +324,27 @@ namespace Controller.Audio
         private void Finish(Playback playback, AudioCompletion result, string reason = null)
         {
             if (playback.Handle.IsFinished) return;
-            active.Remove(playback);
-            playback.CancelLoad?.Invoke(); playback.CancelLoad = null;
+            RemoveActive(playback);
+            var cancel = playback.CancelLoad; playback.CancelLoad = null;
+            var lease = playback.Lease; playback.Lease = null;
             var emitter = playback.Emitter;
             if (emitter != null)
             {
                 if (emitter.Pending == playback) { emitter.Pending = null; emitter.Transition = null; emitter.Envelope = 1; }
                 if (emitter.Current == playback) { emitter.Source.Stop(); emitter.Source.clip = null; emitter.Current = null; emitter.Transition = null; emitter.Envelope = 1; }
             }
-            playback.Lease?.Dispose(); playback.Lease = null;
             Recycle(emitter);
             if (reason != null) { LastFailure = reason; host.ReportFailure(reason); }
             playback.Handle.Finish(result, reason);
+            // Store leases update internal counts now. Actual provider releases
+            // are queued by the store until this entire engine mutation commits.
+            AudioCallbacks.Invoke(cancel); AudioCallbacks.Dispose(lease);
         }
         public bool Stop(AudioHandle handle, float seconds) => StopAt(handle, seconds, 0f);
         private bool StopAt(AudioHandle handle, float seconds, float target)
         {
             using var mutation = callbacks.Begin();
+            SyncListenerPause();
             var p = Find(handle); if (p == null) return false;
             if (handle.State == AudioPlaybackState.Loading) Finish(p, AudioCompletion.Cancelled);
             else if (handle.State == AudioPlaybackState.Paused) Finish(p, AudioCompletion.Stopped);
@@ -296,8 +353,15 @@ namespace Controller.Audio
             return true;
         }
         public bool Pause(AudioHandle handle, bool pause)
-        { var p = Find(handle); if (p == null) return false; handle.UserPaused = pause; ApplyPause(p); return true; }
-        private bool Paused(Playback p) => p.Handle.UserPaused || backgroundPaused || (gamePaused && !p.Options.IgnoreGamePause);
+        { SyncListenerPause(); var p = Find(handle); if (p == null) return false; handle.UserPaused = pause; ApplyPause(p); return true; }
+        private bool Paused(Playback p) => p.Handle.UserPaused || backgroundPaused || ((gamePaused || listenerPaused) && !p.Options.IgnoreGamePause);
+        private void SyncListenerPause()
+        {
+            bool value = AudioListener.pause;
+            if (listenerPaused == value) return;
+            listenerPaused = value;
+            foreach (var p in active) ApplyPause(p);
+        }
         private void ApplyPause(Playback p)
         {
             if (p.Handle.State == AudioPlaybackState.Loading || p.Handle.IsFinished) return;
@@ -381,6 +445,7 @@ namespace Controller.Audio
         {
             using var mutation = callbacks.Begin();
             if (disposed) return;
+            SyncListenerPause();
             for (int i = preparations.Count - 1; i >= 0; i--) CheckPreparation(preparations[i]);
             bool gainsChanged = false;
             for (int i = 0; i < 4; i++) if (busTweens[i] != null)
@@ -410,7 +475,12 @@ namespace Controller.Audio
         }
         public void Preload(AudioClipAddress address, string group, Action<bool> completed)
         {
-            store.Request(address, true, lease => { bool success = lease?.Clip != null; lease?.Dispose(); completed?.Invoke(success); }, group);
+            using var mutation = callbacks.Begin();
+            store.Request(address, true, lease =>
+            {
+                bool success = lease?.Clip != null; AudioCallbacks.Dispose(lease);
+                if (completed != null) callbacks.Enqueue(() => AudioCallbacks.Invoke(completed, success));
+            }, group);
         }
         public void PrepareClip(AudioClipAddress address, string group, Action<bool> completed)
         {
@@ -421,7 +491,7 @@ namespace Controller.Audio
             var cancel = store.Request(address, true, lease =>
             {
                 using var delivery = callbacks.Begin();
-                if (preparation.Finished) { lease?.Dispose(); return; }
+                if (preparation.Finished) { AudioCallbacks.Dispose(lease); return; }
                 preparation.CancelLoad = null; preparation.Lease = lease;
                 if (lease?.Clip == null) { FinishPreparation(preparation, false); return; }
                 try
@@ -445,10 +515,11 @@ namespace Controller.Audio
         {
             if (preparation.Finished) return;
             preparation.Finished = true; preparations.Remove(preparation);
-            preparation.CancelLoad?.Invoke(); preparation.CancelLoad = null;
-            preparation.Lease?.Dispose(); preparation.Lease = null;
+            var cancel = preparation.CancelLoad; preparation.CancelLoad = null;
+            var lease = preparation.Lease; preparation.Lease = null;
             var completed = preparation.Completed; preparation.Completed = null;
             if (completed != null) callbacks.Enqueue(() => AudioCallbacks.Invoke(completed, success));
+            AudioCallbacks.Invoke(cancel); AudioCallbacks.Dispose(lease);
         }
         public bool TryGetCached(AudioClipAddress address, out AudioClip clip) => store.TryGetCached(address, out clip);
         public void ReleaseGroup(string group)
@@ -459,6 +530,19 @@ namespace Controller.Audio
             store.ReleaseGroup(group);
         }
         public void ReleaseUnused() => store.ReleaseUnused();
+        public void AudioConfigurationChanged()
+        {
+            using var mutation = callbacks.Begin();
+            if (disposed) return;
+            const string reason = "Audio system configuration changed";
+            foreach (var p in active.ToArray())
+                Finish(p, p.Handle.State == AudioPlaybackState.Loading ? AudioCompletion.Cancelled : AudioCompletion.Failed, reason);
+            // Reset invalidates old preparations and resident data assumptions.
+            SetProvider(provider, true);
+            Array.Clear(bankTweens, 0, bankTweens.Length); Array.Clear(busTweens, 0, busTweens.Length);
+            foreach (var emitter in emitters) emitter.AppliedGain = float.NaN;
+            RefreshRouting(); RefreshGains();
+        }
         public AudioDiagnostics Diagnostics
         {
             get

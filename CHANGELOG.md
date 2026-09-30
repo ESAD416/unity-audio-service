@@ -1,5 +1,17 @@
 # 變更紀錄
 
+## Unreleased — R11～R15 可靠性修正、單音效索引與閒置縮池（2026-09-30）
+
+- 先提交播放終態、名額與聲源清理，再釋放 Provider lease 及派送通知，修正釋放重入造成超額接納或 Shutdown 後遺留 Loading。釋放例外會記錄且不妨礙其他清理與一次完成通知。
+- 外部 `AudioListener.pause` 納入暫停原因，修正 one-shot 提前 Completed；保留 UI 忽略全域暫停、個別／背景暫停與播放淡變凍結的規則。
+- 處理 `OnAudioConfigurationChanged`：Playing／Paused 結束為 Failed，Loading 為 Cancelled，原因為 `Audio system configuration changed`；取消舊準備與預載、使服務快取／群組保留失效，重套 Mixer 與設定。保留服務暫停／靜音／音量，不自動續播 BGM；需由呼叫端重新播放或重建自有素材。
+- 新增可選 `IAudioClipProviderRefresh`。`RefreshClipProvider()` 會清除內建 Addressables 定位／別名快取並隔離世代，Fallback 向主備來源轉送；已取得的舊 lease 持續有效，晚到結果不回填新快取。執行期 catalog 更新完成後須呼叫此 API；AssetBundle 更新配置仍由專案負責。
+- 一般單音效並發判斷改用按需啟用的分類＋ID 計數索引，包含 Loading／Paused，空場後停止維護；替換順序與 R10 拒絕規則保留。
+- 新增 `TrimIdleSources(minimumCapacity = 0, maxToRemove = 32)`，明確限量銷毀閒置動態聲源；最低容量指使用中＋閒置總數，排除五個相容聲源，不自動縮池。`Diagnostics.CreatedSources` 表示目前持有數，縮池後會下降。
+- 本機 Editor、256 聲源、1,000 次同音效拒絕：ID 路徑 3.3534 → 0.2580 ms；外部 clip 路徑 7.8391 → 0.5488 ms。暖池不限量播放約 0.41 ms，無新增配置事件；方法、首次索引成本、縮池／重建取捨及最終驗收見改善計畫 §5.12。
+
+- 最終完整 PlayMode 205／205（含六項量測）、EditMode／Reload 14／14、macOS Player 選定測試 78／78 通過，原七個失敗案例均轉為通過。Player 使用無圖形模式，驗證真實 packed clip 及 HTTP catalog／AssetBundle 更新；實體裝置切換與其他平台仍未驗證。
+
 ## Unreleased — 狀態去重、聲源預熱與拒絕路徑優化（2026-09-30）
 
 - 相同遊戲／背景暫停及同通道靜音直接返回，省略重複快照與聲源巡訪；新播放、延遲載入及池重用仍套用當下狀態。

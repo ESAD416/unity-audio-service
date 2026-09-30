@@ -2,9 +2,9 @@
 
 文件日期：2026-09-30
 
-文件版本：1.14
+文件版本：1.15
 
-狀態：第一、第二階段核心與效能改善已完成既有本機 Editor 驗收；最新審查新增 R11～R15 五類待修邊界缺陷，完整 PlayMode 為 172 通過／7 失敗（見 5.11）；第三階段套件化尚未開始
+狀態：R11～R15 已修正，單音效計數索引與可選閒置縮池已完成；205 項 PlayMode、14 項 EditMode／Reload、78 項 macOS Player 選定測試通過，含實際 Addressables catalog 更新（見 5.12）；第三階段套件化尚未開始
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。
 
@@ -564,6 +564,8 @@ XML／log 在 `work/stage-two-hardening/`；逐步 CSV、修改前／階段間 C
 
 ### 5.11 再次開源／官方資料審查與缺陷重現（2026-09-30）
 
+以下保留修正前的審查與失敗證據；R11～R15 後續修正及最新驗收見 5.12。
+
 依使用者要求重新搜尋，對照 **5.10 完成後的工作目錄版本**。本輪重點為 Provider 釋放邊界、Unity 全域暫停／音訊系統重設，以及 Addressables 對應更新；新增本機測試與文件，正式 Runtime／Editor C# 未修改。原有 SHA-256 基準全部相同，基準未含的兩個 Interface 檔案另核對與 HEAD 相同。以下為研究與待修清單，沒有把發現列為已修復。
 
 **重新核對的開源來源：** 使用 GitHub API 核對當日預設分支提交，再下載固定提交中相關的 30 個原始碼／package manifest 檔案。前四項提交與 5.8 相同，CarterGames 為本輪新增比較對象；版本號取自各 package.json。僅檢查相關子系統，未宣稱完整審計這些專案，也未執行或匯入第三方程式。
@@ -616,6 +618,58 @@ R11、R12 的必要前置步驟是呼叫 ReleaseUnusedClips 移除服務的快�
 測試位於 `Assets/AudioService/Tests/SystemAudit20260930Tests.cs`；XML／log 在 `work/stage-two-hardening/`；逐例 JSON、來源 manifest／SHA、前後正式 C# 雜湊及彙整在 `work/system-audit-20260930/`，皆沿用本機 Git 忽略。Reset 測試還原原始音訊配置，runner 保留／還原專案設定，未改 OS 音訊裝置。14 項 EditMode／Reload 是 5.10 的歷史通過結果，本輪未重跑。Player／packed content／真實裝置切換仍未驗證。
 
 **建議次序：** 先修 R11／R12 的釋放與生命週期一致性，再修 R13／R14 的 Unity 音訊狀態整合；R15 在需要執行期素材更新時一併補齊。以新測試轉為通過及既有回歸維持通過作為驗收，再決定單音效索引或縮池的效能工作。套件化前應處理已確認缺陷或明訂支援限制，不能只沿用 5.10 的 170／170 就宣告目前所有邊界已成熟。
+
+### 5.12 R11～R15 修正、計數索引與閒置縮池（2026-09-30）
+
+依使用者核准的方案實作，沿用 5.11 的缺陷重現與官方契約，不新增第三方 runtime 依賴。正式變更集中在回呼／lease 生命週期、Unity 音訊狀態整合與 Provider 刷新；E1～E4 仍為可選規劃。
+
+**修正內容與相容性**
+
+| 項目 | 完成的行為 |
+| --- | --- |
+| R11／R12 釋放重入與例外 | 共用 mutation／回呼佇列；先更新終態、播放名額、來源與 store 使用計數，再執行外部 Provider lease 釋放及通知。釋放內 Play 仍遵守上限，Shutdown 不留 Loading；釋放例外會記錄且不阻止其餘清理與一次完成通知。無法代替故障的 Provider 修復其自身資源 |
+| R13 Listener 暫停 | 同步 AudioListener.pause，與個別、遊戲、背景原因組合；新播放與既有 one-shot 不再誤判完成。UI 的 IgnoreGamePause 略過遊戲／Listener 暫停，背景仍適用。單次播放包絡在暫停時凍結，共用 bus／bank 增益淡變沿用既有行為 |
+| R14 音訊配置重設 | OnAudioConfigurationChanged 結束 Playing／Paused 為 Failed、Loading 為 Cancelled，原因 `Audio system configuration changed`；取消舊預載／準備、使服務快取及群組保留失效、停止舊淡變並重套 Mixer。保留服務音量／暫停／靜音／當前分類增益；不自動續播 BGM。完成回呼可新建播放；失效的自有 AudioClip 由擁有者重建 |
+| R15 定位刷新 | 新增可選 IAudioClipProviderRefresh，RefreshClipProvider 更新服務 store 及 Addressables 定位／別名世代；Fallback 轉送且不遞迴發送 Changed。取消舊取得請求，晚到結果不污染新世代；已發出的舊 lease 持續有效到 Dispose。普通 Addressables 完成交付仍保留較早回呼可取消後續等待者的契約 |
+
+AudioSettings 的事件訂閱在 Initialize 使用先解除再註冊，Shutdown 解除，避免重複初始化／Reload 留下重複訂閱。音訊重設後個別 handle 已結束，個別 Pause 不移轉至新 handle；需要的素材群組須重新 Preload／PrepareClip。正式來源未引用本機驗證程式。
+
+**量測後保留的兩項優化**
+
+1. 一般單音效限制使用分類＋ID 計數，首次遇到 MaxInstances 才建立；包含已存在的 Playing、Paused、Loading。之後隨接納／結束更新，空場後停止維護，下次需要時重建；保留字典容量供重用。BGM／Voice 替換分支仍掃描並排除被替換槽；StealOldest 的選取順序與 R10 完整拒絕規則不變。
+2. 新增 `TrimIdleSources(minimumCapacity = 0, maxToRemove = 32)`，只移除閒置動態聲源，每次受預算限制，Unity 在幀末完成 Destroy。最低容量指使用中＋閒置的動態總數，不含五個相容來源；不停止播放／暫停／Loading。較大的最低值不建立新來源，負值視為 0；無有效預算或未 Ready 回傳 0。不自動縮池，需要時重新預熱或按播放需求建立。
+
+同機 Unity 6000.6.3f1 Editor，256 聲源，暖身後七次中位數。依序保存本輪前、僅可靠性修正、加入索引／縮池三版；下表 CPU 為該欄指定的整批呼叫成本，GC 為 Profiler 的 **GC.Alloc 事件次數，不是 bytes**。
+
+| 測點 | 本輪前 ms | 僅修正 ms | 加索引 ms | GC 事件（僅修正 → 加索引） |
+| --- | ---: | ---: | ---: | ---: |
+| 同音效 ID 拒絕 1,000 次 | 3.3000 | 3.3534 | 0.2580 | 2,000 → 2,000 |
+| 同音效外部 clip 拒絕 1,000 次 | 7.7387 | 7.8391 | 0.5488 | 5,000 → 5,003 |
+| 暖池、有單音效限制，播放 256 次 | 1.3797 | 1.4059 | 0.4556 | 2,304 → 2,304 |
+| 暖池、不限量，播放 256 次 | 0.4046 | 0.4115 | 0.4096 | 2,304 → 2,304 |
+| 暖池、只有全域限制，播放 256 次 | 0.4415 | 0.4286 | 0.4372 | 2,304 → 2,304 |
+| 暖快取 ID、不限量，播放 256 次 | 0.4061 | 0.4162 | 0.4204 | 2,560 → 2,560 |
+
+外部 clip 拒絕測點第一次啟用索引有三次額外配置事件；ID 測點在前置播放已啟用。索引有按不同 category／ID 數量成長的管理記憶體成本，未量得整個遊戲的記憶體／幀率收益。後續完整 suite 的同版覆核較慢：ID 拒絕 0.3278 ms、外部 clip 拒絕 0.6585 ms、不限量暖池 0.4663 ms；仍支持索引改善該熱路徑，不能把單次 Editor 數值視為裝置效能保證。
+
+縮池測點以七次中位數計：動態池 256 → 32，分七次各移除 32，呼叫 CPU 合計約 0.1326 ms，單次最大值的中位數約 0.0238 ms；重新建立 224 個來源約 1.1330 ms。幀末後含相容來源的 AudioSource 數由 261 → 37，`Profiler.GetRuntimeMemorySizeLong(AudioSource)` 合計 359,136 → 50,912 bytes。此數值僅為 AudioSource 物件回報，**不是完整 GameObject、native DSP 或 process RSS**；CPU 不含幀末真正銷毀成本。故只提供由呼叫端選擇時機的縮池，不自動在每幀回收。
+
+**最終驗收**
+
+| 驗證 | 結果與範圍 |
+| --- | --- |
+| 完整 Editor PlayMode | 205／205（199 行為＋6 量測），0 failed／skipped。原 179 項保留，新加 25 項行為＋1 項縮池量測；原七個失敗均轉為通過 |
+| 本專案 EditMode／Reload | 14／14，含 12 項 Catalog 與 2 項關閉 Domain／Scene Reload 的重入情境 |
+| macOS Standalone Player | 選定 78／78，0 failed／skipped；包含 R11～R15、額外生命週期、Provider 刷新、索引／縮池及核心播放回歸 |
+| Packed content | 原專案素材 address／GUID 共用同一載入 operation，最後釋放回到零 |
+| 真實 catalog 更新 | 兩版獨立建置的 catalog／AssetBundle，loopback HTTP 取得舊版，CheckForCatalogUpdates／UpdateCatalogs 後 RefreshClipProvider；舊 handle 持有 hot-v1，新 handle 播 hot-v2；新舊同時有效且能各自釋放。測試設定 UniqueBundleIds=true，正式專案建置設定未改 |
+| AudioSettings.Reset | Editor 與 Player 均收到程式 Reset 回呼，舊 BGM 得到 Finished／Failed 及指定原因；原配置在測試後還原。不是實體耳機拔插測試 |
+
+開發過程保留失敗紀錄：首次針對性測試 106／107，發現把 Addressables 普通交付一律延後會破壞較早回呼取消後續等待者，修正後核心完整 196／196。Player 首次建置成功但在 macOS Metal 畫面呈現等待卡住，180 秒無測試活動逾時；改用 Test Framework 1.8.0 本機原始碼所示的 TestPlayerBuildModifier／TestRunCallback 分離建置與執行，以 `-batchmode -nographics` 驗證。第二次 77／78，原因是測試群組誤入初始 catalog；隔離測試資產並加初始不存在斷言後，最終 78／78。沒有把這兩次失敗算成通過。
+
+因此本輪確認的是 **macOS 無圖形 Player 的音訊／素材生命週期**，尚未完成圖形 Player 正常呈現、其他 Unity 版本／平台或實體裝置切換驗證；未宣稱人工聽感或端到端延遲通過。最終 C# 沒有編譯錯誤／警告，專案設定已還原，`git diff --check` 通過。
+
+本輪正式前版、核心版與最終來源快照、CSV／XML 摘要及雜湊在 `work/reliability-repair-20260930/`；完整 Editor XML／log 為 `work/stage-two-hardening/repair-final20260930.*`、`repair-edit20260930.*`，Player 證據在 `work/reliability-repair-20260930/player/`。前兩次 Player 紀錄保留於 `player-attempt1/`、`player-attempt2/`，原始缺陷證據仍在 `work/system-audit-20260930/`。測試與工具繼續依使用者規則僅保留本機、由 Git 忽略；README／CHANGELOG 記錄對外契約。
 
 ## 6. 第三階段：對外套件
 
@@ -794,7 +848,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 依使用者偏好加入本機測試、輔助腳本與臨時目錄的忽略規則，更新為 v1.2。
 - [x] Unity `6000.6.3f1` 的兩處過時 API 替換、Editor 重新編譯與 Console 檢查（2026-09-29，見 1.2）。
 - [x] Unity 播放基準執行與缺陷重現（21 項基準中 18 項失敗，見 4.5）。
-- [ ] 升級後 Addressables content build 與 Player 建置／播放驗證。
+- [x] 升級後 Addressables content build 與 macOS 無圖形 Player 播放／catalog 更新驗證（見 5.12）；圖形呈現、其他平台與實體裝置另列未驗證。
 - [x] 第一階段實作與驗收（最終 39／39 PlayMode 測試及 Editor 原場景播放檢查通過，見 4.5）。
 - [x] 第二階段 C1～C7 實作與本機 Editor 驗收（92／92 PlayMode、2 項 Play Mode 重入情境及原場景操作／聲源池基準通過，見 5.4）。
 - [x] 第二階段補強 R7～R9、效能前後量測與 PrepareClip（118 項行為測試、量測及 Reload 驗收通過，見 5.5）。
@@ -806,7 +860,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 修正 R10：並發拒絕保留既有播放／待載入／轉場，補動態上限、多個替換及回呼回歸（149 項 PlayMode、14 項 EditMode／Reload，見 5.9）。
 - [x] 完成暫停／靜音去重、可選聲源預熱與拒絕路徑優化，保留逐步前後量測與原子拒絕契約（170 項 PlayMode、14 項 EditMode／Reload，見 5.10）。
 - [x] 再次核對五個固定提交的開源專案與官方資料，新增九項邊界／對照測試並確認 R11～R15（179 項 PlayMode 中 172 通過／7 失敗，見 5.11）。
-- [ ] 修正 R11～R15，驗證新邊界與既有契約，再依目標場景決定是否實作單音效索引及閒置縮池。
+- [x] 修正 R11～R15，完成按需計數索引、顯式閒置縮池與前後量測；205 項 PlayMode、14 項 EditMode／Reload、78 項 macOS Player 測試通過（見 5.12）。
 
 ## 12. 原專案與 Unity 技術依據
 
@@ -839,3 +893,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.12 | 2026-09-30 | 修正 R10：完整判斷並發限制後才替換，拒絕保留既有聲音、待載入與 BGM 轉場／淡出；保留動態上限、替換順序與回呼語意。新增 14 項回歸，修正前 6 項失敗；修正後 149 項 PlayMode、14 項 EditMode／Reload 通過 |
 | 1.13 | 2026-09-30 | 完成暫停／靜音同值去重、PrewarmSources 可選容量預熱、接納前判斷與拒絕配置減少；補逐步量測、20 項行為回歸與 1 項量測，170 項 PlayMode、14 項 EditMode／Reload 通過；保留 R10、handle、快照及生命週期契約 |
 | 1.14 | 2026-09-30 | 重新核對五個開源專案與 Unity／Addressables 官方資料，重現 Provider 釋放重入／例外、Listener 暫停誤判、音訊重設狀態與定位快取五類缺陷 R11～R15；新增九項測試，完整 179 項中 172 通過／7 失敗。列出修正順序及單音效索引／縮池候選；正式 C# 未修改，缺陷尚未修復 |
+| 1.15 | 2026-09-30 | 修正 R11～R15，明訂音訊重設 Failed／Cancelled 政策，加入 Provider 刷新世代、按需單音效計數索引與限量閒置縮池；205 項 PlayMode、14 項 EditMode／Reload、78 項 macOS 無圖形 Player 驗收通過，含真實 HTTP catalog／AssetBundle 更新；保留量測、失敗與修正紀錄及平台限制 |
