@@ -7,8 +7,8 @@
 - Unity `6000.6.3f1`、Addressables `2.11.2`、Unity Test Framework `1.8.0`。
 - Runtime assembly：`Controller.Audio`，目前仍依賴 `Unity.Addressables`／`Unity.ResourceManager`。尚未支援不安裝 Addressables 的獨立核心套件。
 - 已驗證本機 Editor／PlayMode、原始 Prefab／場景、Addressables Editor 資產模式及無 Domain Reload 的 Play Mode 重入。
-- 2026-09-30：R11～R15 五類缺陷已修正，完整 PlayMode **205／205**、本專案 EditMode／Reload **14／14**、macOS Standalone Player 選定回歸 **78／78** 通過。涵蓋實際 packed clip 的 address／GUID 共用、HTTP catalog／AssetBundle 更新，以及程式觸發 AudioSettings.Reset。
-- Player 以無圖形模式執行；其他 Unity 版本／平台、圖形 Player 正常呈現與實體耳機拔插尚未完成驗證。修正、量測與驗收界線見[改善計劃第 5.12 節](unity-audio-service-improvement-plan.md)。
+- 2026-09-30：BGM 載入、正常播放配置與批次控制優化完成，完整 PlayMode **219／219**、Editor／Reload **18／18** 通過；macOS Player 選定測試在無圖形模式與 Metal 圖形模式各 **101／101** 通過，含真實 Addressables catalog／AssetBundle 更新。
+- 實際遊戲場景的畫面／聽感、其他 Unity 版本／平台與實體耳機拔插仍需驗證。前輪可靠性修正見[改善計畫第 5.12 節](unity-audio-service-improvement-plan.md)，本輪變更、CPU／配置 bytes 與 GC 觀察見同文件 **§5.13**。
 
 ## 快速導入
 
@@ -103,7 +103,10 @@ Controller 初始化／重新啟用也會重建索引。直接使用 `AudioCatal
 audio.Preload(AudioCategory.Sfx, "ui.result", "level-1", loaded =>
     UnityEngine.Debug.Log($"Preload: {loaded}"));
 
-// 在載入畫面準備實際音訊資料；可能依匯入設定同步解碼。
+// 在載入畫面依序初始化、預熱聲源、準備素材。
+// audio 已指向場景中的 AudioController；所有呼叫在主執行緒進行。
+audio.Initialize();
+audio.PrewarmSources(24);
 audio.PrepareClip(AudioCategory.Bgm, "music.title", "level-1", ready =>
 {
     if (ready) audio.PlayBgmHandle("music.title");
@@ -128,6 +131,17 @@ audio.ReleaseUnusedClips();
 - Resources 在最後 lease／快取保留離開後移除自身引用，不強制 `UnloadAsset`，避免傷及外部持有者；實際 native 記憶體回收依 Unity 的未使用資產清理。
 - 直接傳入的 AudioClip 不納入 Provider 的卸載責任。不要由外部主動銷毀仍在播放的 clip。
 - 舊的全量預載旗標仍可明確開啟，但預設使用按需載入與上述指定群組預載。尚未加入 LRU／記憶體預算淘汰。
+
+### BGM 匯入設定與載入範例
+
+兩首範例 BGM 使用 **Streaming、Load In Background 開啟、Preload Audio Data 關閉**，保留原壓縮品質與取樣率。長音樂的資料改在播放時逐段讀取／解碼；短 SFX 與 Voice 的設定保留。`PrepareClip` 的 Loaded 表示 Unity 已可使用該 clip，不表示 Streaming 全曲已載入記憶體或無裝置輸出延遲。
+
+選取 AudioClip 後，可使用 `Tools > Audio Service > Audio Imports`：
+
+- `Review Selected Clips`：唯讀提示長音樂的解壓／首次載入成本與目前平台 override。
+- `Apply Streaming ...`／`Apply Background Decompression ...`：明確選用 Default 匯入設定；保留壓縮格式、品質、取樣率及平台 overrides，平台設定需另外檢查。工具不會在匯入時自動修改音檔。
+
+在 Play Mode 的 `AudioControllerDebugMenu` 使用 `Audio/Loading/Prepare and Play BGM`，可執行初始化 → 聲源預熱 → PrepareClip → 成功後播放。`Release Prepared BGM` 或停用元件會取消等待、停止此範例持有的 handle、釋放群組；離開整個場景時再按需呼叫 `ReleaseUnusedClips()` 清除普通快取保留。準備中的 key 有快照，取消後的舊回呼不會遲到播放。
 
 ## 並發、聲源池與暫停
 
@@ -176,6 +190,8 @@ int removed = audio.TrimIdleSources(minimumCapacity: 32, maxToRemove: 16);
 
 並發檢查通過後才建立設定快照、播放資料及所需載入回呼。一般入口僅有全域限制時直接使用現有播放數量；一般單音效限制首次使用時建立分類＋ID 計數索引，包含 Playing／Paused／Loading，之後隨接納與結束更新；空場後停止維護，需要時再建立。BGM／Voice 替換分支保留排除被替換槽的完整檢查，StealOldest 仍依原先順序選取。拒絕仍回傳獨立 handle，保留 ID、原因與晚訂閱通知。效能測點與成本見改善計畫 §5.10、§5.12。
 
+內部設定與淡變使用值資料；handle 直接定位播放資料，完成即清除內部引用，公開 handle 仍各自保留最終結果。批次控制重用快照緩衝並維持原有播放順序；首次緩衝擴張、正常播放、完成事件與使用者回呼仍可能配置。24／64／256 聲音的 CPU、配置 bytes 與持續 GC 觀察見改善計畫 §5.13。
+
 ## 音量與設定
 
 最終音量由玩家 Master／分類設定、暫時 Master／分類增益、舊 API 分支增益、單次播放音量與播放包絡組成。Mixer 可用時玩家設定由 Mixer 套用；`SetMixer(null)` 明確使用無 Mixer 模式，由來源計算相同音量。預設會尋找 `Resources/Audio/MasterMixer`。
@@ -219,4 +235,4 @@ Bootstrap 以自身作為全域 Provider 註冊擁有者；舊擁有者退訂不
 
 `Diagnostics` 提供 Playing、Paused、Loading、PooledSources、CreatedSources、CachedClips、ClipUsers、PendingLoads、PreparingClips 與 LastFailure。服務 Ready 時，`CreatedSources` 是目前持有的聲源數（含五個相容聲源），不是累計建立次數；縮池後會下降。`PreparingClips` 包含等待資產或音訊資料的準備需求，`PendingLoads` 僅計服務資產載入。快取統計指目前 Provider 世代的服務快取；切換後仍在播放的舊 lease 會保持有效，但不列入新世代快取統計。Addressables Provider 的 `CachedOperationCount` 也只計目前世代，舊 lease 仍可能持有舊 native operation。`verboseLogging` 可開關額外日誌。
 
-原第二階段驗收見 [改善計畫 §5.4](unity-audio-service-improvement-plan.md#54-第二階段實作與驗收紀錄)，後續修正與效能前後量測見同文件 §5.5；音量去重、Catalog 索引／驗證與 2026-09-30 驗收見 §5.7，R11～R15、計數索引／縮池與 macOS Player 驗收見 §5.12，相容性變更見 [CHANGELOG](CHANGELOG.md)。本機測試位於受忽略的 `Assets/AudioService/Tests/`；重跑工具在 `Tools/AudioService/`，XML／Profiler 操作紀錄在 `work/stage-two/`、`work/stage-two-hardening/`、`work/core-optimization-20260930/` 與 `work/reliability-repair-20260930/`，均不隨 Git 發布。
+原第二階段驗收見 [改善計畫 §5.4](unity-audio-service-improvement-plan.md#54-第二階段實作與驗收紀錄)，後續修正與效能前後量測見同文件 §5.5；音量去重、Catalog 索引／驗證與 2026-09-30 驗收見 §5.7，R11～R15、計數索引／縮池見 §5.12，本輪 BGM／配置／批次控制及 Metal Player 驗收見 §5.13，相容性變更見 [CHANGELOG](CHANGELOG.md)。本機測試位於受忽略的 `Assets/AudioService/Tests/`；重跑工具在 `Tools/AudioService/`，XML／Profiler 操作紀錄在 `work/stage-two/`、`work/stage-two-hardening/`、`work/core-optimization-20260930/`、`work/reliability-repair-20260930/` 與 `work/performance-refinement-20260930/`，均不隨 Git 發布。

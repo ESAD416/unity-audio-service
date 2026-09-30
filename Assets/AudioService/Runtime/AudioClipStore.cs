@@ -35,6 +35,19 @@ namespace Controller.Audio
             if (entries.TryGetValue(Key(address), out var entry)) clip = entry.Lease?.Clip;
             return clip != null;
         }
+        public bool TryAcquireResident(AudioClipAddress address, out AudioClipLease lease)
+        {
+            lease = null;
+            if (disposed || !AudioValues.Alive(provider) || !entries.TryGetValue(Key(address), out var entry)
+                || entry.Loading || entry.Lease?.Clip == null) return false;
+            // Ordinary playback retains the entry exactly as Request(group: null).
+            entry.Retained = true; lease = AcquireUser(entry); return true;
+        }
+        private AudioClipLease AcquireUser(Entry entry)
+        {
+            entry.Users++;
+            return new AudioClipLease(entry.Lease.Clip, () => { entry.Users--; Cleanup(entry); });
+        }
         public Action Request(AudioClipAddress address, bool allowAsync, Action<AudioClipLease> callback, string group = null)
         {
             using var mutation = callbacks.Begin();
@@ -50,8 +63,7 @@ namespace Controller.Audio
             if (!entry.Loading)
             {
                 // Resident requests have no pending work and need no waiter/list/cancel closure.
-                entry.Users++;
-                AudioCallbacks.Deliver(callback, new AudioClipLease(entry.Lease.Clip, () => { entry.Users--; Cleanup(entry); }));
+                AudioCallbacks.Deliver(callback, AcquireUser(entry));
                 return NoCancellation;
             }
             var waiter = new Waiter { Callback = callback, Group = group };
@@ -105,8 +117,7 @@ namespace Controller.Audio
                 AudioClipLease lease = null;
                 if (!disposed && entry.Lease?.Clip != null)
                 {
-                    entry.Users++;
-                    lease = new AudioClipLease(entry.Lease.Clip, () => { entry.Users--; Cleanup(entry); });
+                    lease = AcquireUser(entry);
                 }
                 deliveries.Add((callback, lease));
             }

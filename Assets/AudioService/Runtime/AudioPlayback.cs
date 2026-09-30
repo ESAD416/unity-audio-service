@@ -33,19 +33,29 @@ namespace Controller.Audio
         public bool AllowAsyncLoad = true;
         public int MaxInstances;
         public AudioConcurrencyPolicy ConcurrencyPolicy;
-        internal PlayOptions Snapshot() => new PlayOptions
+    }
+
+    // An accepted request owns its settings, even when the caller later mutates
+    // the public options or a provider release reenters the service.
+    internal readonly struct PlaybackOptions
+    {
+        public readonly bool Loop, IgnoreGamePause, AllowAsyncLoad;
+        public readonly float Volume, Pitch, FadeInSeconds, FadeOutSeconds;
+        public PlaybackOptions(PlayOptions source, bool forceLoop = false)
         {
-            Loop = Loop, Volume = AudioValues.Unit(Volume), Pitch = AudioValues.Pitch(Pitch),
-            FadeInSeconds = AudioValues.Seconds(FadeInSeconds), FadeOutSeconds = AudioValues.Seconds(FadeOutSeconds),
-            IgnoreGamePause = IgnoreGamePause, AllowAsyncLoad = AllowAsyncLoad,
-            MaxInstances = Mathf.Max(0, MaxInstances), ConcurrencyPolicy = ConcurrencyPolicy
-        };
+            Loop = forceLoop || (source?.Loop ?? false);
+            Volume = AudioValues.Unit(source?.Volume ?? 1f); Pitch = AudioValues.Pitch(source?.Pitch ?? 1f);
+            FadeInSeconds = AudioValues.Seconds(source?.FadeInSeconds ?? 0f);
+            FadeOutSeconds = AudioValues.Seconds(source?.FadeOutSeconds ?? 0f);
+            IgnoreGamePause = source?.IgnoreGamePause ?? false; AllowAsyncLoad = source?.AllowAsyncLoad ?? true;
+        }
     }
 
     public sealed class AudioHandle
     {
         private Action<AudioHandle> completed;
         internal AudioPlaybackEngine Owner;
+        internal object Playback;
         internal bool UserPaused;
         public long Id { get; internal set; }
         public AudioId AudioId { get; internal set; }
@@ -68,7 +78,7 @@ namespace Controller.Audio
         {
             if (IsFinished) return;
             var owner = Owner;
-            State = AudioPlaybackState.Finished; Result = result; FailureReason = reason; Owner = null;
+            State = AudioPlaybackState.Finished; Result = result; FailureReason = reason; Owner = null; Playback = null;
             var subscribers = completed; completed = null;
             if (subscribers == null) return;
             DispatchCompleted(owner, subscribers);

@@ -15,6 +15,7 @@ namespace Controller.Audio
         [SerializeField] private string voiceKey;
         [SerializeField] private bool voiceKeyLoop;
         [SerializeField] private bool keyAllowAsyncLoad = true;
+        [Min(0)] [SerializeField] private int preparedSourceCapacity = 24;
 
         [Header("Test Volumes")]
         [Range(0f, 1f)] [SerializeField] private float masterVolume = 1f;
@@ -26,6 +27,44 @@ namespace Controller.Audio
         [SerializeField] private MonoBehaviour settingsHandlerSource;
 
         private IAudioSettingsHandler _settingsHandler;
+        private AudioController preparedController;
+        private AudioHandle preparedBgm;
+        private string preparedGroup;
+        private int preparationVersion;
+
+        [ContextMenu("Audio/Loading/Prepare and Play BGM")]
+        private void ContextPrepareBgm()
+        {
+            if (!Application.isPlaying || !isActiveAndEnabled || !TryGetController(out var controller) || string.IsNullOrWhiteSpace(bgmKey)) return;
+            ContextReleasePreparedBgm();
+            controller.Initialize();
+            if (!controller.Ready) return;
+            preparedController = controller;
+            preparedGroup = "AudioDebugMenu:" + GetEntityId().ToString();
+            string key = bgmKey;
+            int version = ++preparationVersion;
+            controller.PrewarmSources(preparedSourceCapacity);
+            controller.PrepareClip(AudioCategory.Bgm, key, preparedGroup, ready =>
+            {
+                if (this == null || version != preparationVersion || !isActiveAndEnabled) return;
+                if (ready && controller != null && controller.Ready) preparedBgm = controller.PlayBgmHandle(key);
+                else Debug.LogWarning("[AudioControllerDebugMenu] BGM preparation did not complete. Retry after the service is ready.", this);
+            });
+        }
+
+        [ContextMenu("Audio/Loading/Release Prepared BGM")]
+        private void ContextReleasePreparedBgm()
+        {
+            preparationVersion++;
+            var controller = preparedController; var handle = preparedBgm; var group = preparedGroup;
+            preparedController = null; preparedBgm = null; preparedGroup = null;
+            handle?.Stop();
+            if (controller != null) controller.ReleaseGroup(group);
+            // Ordinary playback also retains the cache. The scene owner chooses
+            // when to call ReleaseUnusedClips for the whole service.
+        }
+
+        private void OnDisable() => ContextReleasePreparedBgm();
 
         private void Awake()
         {

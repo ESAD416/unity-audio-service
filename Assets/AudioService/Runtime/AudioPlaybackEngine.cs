@@ -6,10 +6,13 @@ namespace Controller.Audio
 {
     internal sealed class AudioPlaybackEngine
     {
-        private sealed class Tween
+        private enum TweenCompletion { None, StartPending, Stop }
+        private struct Tween
         {
             public float Start, Target, Duration, Elapsed;
-            public Action Completed;
+            public TweenCompletion Completion;
+            public Playback Playback;
+            public bool Active => Duration > 0;
             public float Advance(float delta) { Elapsed += delta; return Mathf.Lerp(Start, Target, Duration <= 0 ? 1 : Mathf.Clamp01(Elapsed / Duration)); }
             public bool Done => Elapsed >= Duration;
         }
@@ -26,7 +29,8 @@ namespace Controller.Audio
         private sealed class Playback
         {
             public AudioHandle Handle;
-            public PlayOptions Options;
+            public PlaybackOptions Options;
+            public AudioClip Clip;
             public AudioClipLease Lease;
             public Action CancelLoad;
             public Emitter Emitter;
@@ -47,6 +51,7 @@ namespace Controller.Audio
         internal AudioCallbackQueue.Scope BeginMutation() => callbacks.Begin();
         private readonly AudioController host;
         private readonly List<Playback> active = new();
+        private readonly Stack<List<Playback>> snapshots = new();
         private Dictionary<(AudioCategory, AudioId), int> audioCounts;
         private bool audioCountsActive;
         private readonly List<Emitter> emitters = new();
@@ -89,7 +94,10 @@ namespace Controller.Audio
             if (refreshLookup && AudioValues.Alive(next) && next is IAudioClipProviderRefresh refreshable)
                 AudioCallbacks.Invoke(refreshable.RefreshClipLookup);
         }
-        private Playback Find(AudioHandle handle) => active.Find(p => ReferenceEquals(p.Handle, handle));
+        private Playback Find(AudioHandle handle) => ReferenceEquals(handle.Owner, this) ? handle.Playback as Playback : null;
+        private List<Playback> RentSnapshot()
+            => snapshots.Count > 0 ? snapshots.Pop() : new List<Playback>(active.Count);
+        private void ReturnSnapshot(List<Playback> snapshot) { snapshot.Clear(); snapshots.Push(snapshot); }
         private int CountAudio(AudioHandle handle)
         {
             // Build only when a per-audio limit is used. Keep ordinary unlimited
@@ -112,10 +120,12 @@ namespace Controller.Audio
         private void AddActive(Playback playback)
         {
             active.Add(playback);
+            playback.Handle.Playback = playback;
             if (audioCountsActive) IncrementAudio(playback.Handle);
         }
         private void RemoveActive(Playback playback)
         {
+            playback.Handle.Playback = null;
             if (!active.Remove(playback) || !audioCountsActive) return;
             var key = (playback.Handle.Category, playback.Handle.AudioId);
             int remaining = audioCounts[key] - 1;
@@ -183,7 +193,7 @@ namespace Controller.Audio
         {
             if (emitter == null || emitter.Current != null || emitter.Pending != null) return;
             Deactivate(emitter);
-            emitter.Transition = null; emitter.Envelope = 1;
+            emitter.Transition = default; emitter.Envelope = 1;
             var source = emitter.Source;
             source.Stop(); source.clip = null; source.loop = false; source.pitch = 1; source.mute = false;
             source.ignoreListenerPause = false; source.outputAudioMixerGroup = null; source.spatialBlend = 0;
@@ -194,21 +204,19 @@ namespace Controller.Audio
         public AudioHandle Play(AudioCategory category, AudioClipAddress address, AudioClip direct, PlayOptions supplied, int bank = -1)
         {
             using var mutation = callbacks.Begin();
-            var handle = new AudioHandle { Id = ++nextId, AudioId = new AudioId(address?.Id ?? (direct != null ? "external:" + direct.GetEntityId() : null)), Category = category, Owner = this };
+            var handle = new AudioHandle { Id = ++nextId, AudioId = new AudioId(address?.Id ?? (direct != null ? "external:" + direct.GetEntityId().ToString() : null)), Category = category, Owner = this };
             if (disposed || !host.Ready || (int)category < 0 || (int)category > 2 || (direct == null && string.IsNullOrWhiteSpace(address?.Id)))
             { Reject(handle, AudioCompletion.Failed, "Service unavailable or empty audio id/clip"); return handle; }
             int maxInstances = Mathf.Max(0, supplied?.MaxInstances ?? 0);
             if (maxInstances == 0 && address != null) maxInstances = Mathf.Max(0, address.MaxInstances);
             if (!TryPlanAdmission(handle, bank, maxInstances, supplied?.ConcurrencyPolicy ?? AudioConcurrencyPolicy.RejectNew, out var victims)) return handle;
-            StartAccepted(handle, address, direct, supplied, bank, maxInstances, victims);
+            StartAccepted(handle, address, direct, supplied, bank, victims);
             return handle;
         }
-        private void StartAccepted(AudioHandle handle, AudioClipAddress address, AudioClip direct, PlayOptions supplied, int bank, int maxInstances, Playback[] victims)
+        private void StartAccepted(AudioHandle handle, AudioClipAddress address, AudioClip direct, PlayOptions supplied, int bank, Playback[] victims)
         {
             // Snapshot before eviction can release a provider lease or invoke external code.
-            var options = supplied != null ? supplied.Snapshot() : new PlayOptions();
-            options.MaxInstances = maxInstances;
-            if (bank == 0) options.Loop = true;
+            var options = new PlaybackOptions(supplied, bank == 0);
             var playback = new Playback { Handle = handle, Options = options, Bank = bank };
             if (victims != null)
                 foreach (var victim in victims)
@@ -217,7 +225,7 @@ namespace Controller.Audio
             {
                 var slot = reserved[bank];
                 if (slot.Pending != null) Finish(slot.Pending, AudioCompletion.Cancelled);
-                slot.Transition = null; slot.Envelope = 1; bankTweens[bank] = null;
+                slot.Transition = default; slot.Envelope = 1; bankTweens[bank] = default;
             }
             AddActive(playback);
             if (bank != 1)
@@ -225,14 +233,15 @@ namespace Controller.Audio
                 var emitter = Rent(bank); playback.Emitter = emitter; emitter.Pending = playback;
             }
             // All one-shots now have their own source, including the legacy convenience API.
-            if (direct != null) Loaded(playback, new AudioClipLease(direct));
+            if (direct != null) Loaded(playback, direct);
+            else if (store.TryAcquireResident(address, out var lease)) Loaded(playback, lease.Clip, lease);
             else RequestClip(playback, address);
         }
         private void RequestClip(Playback playback, AudioClipAddress address)
         {
             // Isolate the load closure from direct playback and rejected requests.
-            var cancel = store.Request(address, playback.Options.AllowAsyncLoad, lease => Loaded(playback, lease));
-            if (!playback.Handle.IsFinished && playback.Lease == null) playback.CancelLoad = cancel;
+            var cancel = store.Request(address, playback.Options.AllowAsyncLoad, lease => Loaded(playback, lease?.Clip, lease));
+            if (!playback.Handle.IsFinished && playback.Clip == null) playback.CancelLoad = cancel;
         }
         private bool TryPlanAdmission(AudioHandle incoming, int bank, int maxInstances, AudioConcurrencyPolicy policy, out Playback[] victims)
         {
@@ -281,14 +290,14 @@ namespace Controller.Audio
 
         private void Reject(AudioHandle handle, AudioCompletion result, string reason)
         { LastFailure = reason; handle.Finish(result, reason); host.ReportFailure(reason); }
-        private void Loaded(Playback playback, AudioClipLease lease)
+        private void Loaded(Playback playback, AudioClip clip, AudioClipLease lease = null)
         {
             using var mutation = callbacks.Begin();
             if (disposed || playback.Handle.IsFinished) { AudioCallbacks.Dispose(lease); return; }
             SyncListenerPause();
             playback.CancelLoad = null;
-            if (lease?.Clip == null) { AudioCallbacks.Dispose(lease); Finish(playback, AudioCompletion.Failed, "Clip load failed: " + playback.Handle.AudioId); return; }
-            playback.Lease = lease;
+            if (clip == null) { AudioCallbacks.Dispose(lease); Finish(playback, AudioCompletion.Failed, "Clip load failed: " + playback.Handle.AudioId); return; }
+            playback.Lease = lease; playback.Clip = clip;
             if (playback.Emitter == null)
             {
                 var primary = reserved[1];
@@ -299,7 +308,7 @@ namespace Controller.Audio
             var emitter = playback.Emitter;
             if (emitter.Current != null && playback.Bank == 0 && playback.Options.FadeOutSeconds > 0 && emitter.Source.isPlaying)
             {
-                emitter.Transition = new Tween { Start = emitter.Envelope, Target = 0, Duration = playback.Options.FadeOutSeconds, Completed = () => Start(playback) };
+                emitter.Transition = new Tween { Start = emitter.Envelope, Target = 0, Duration = playback.Options.FadeOutSeconds, Completion = TweenCompletion.StartPending, Playback = playback };
             }
             else Start(playback);
         }
@@ -309,11 +318,11 @@ namespace Controller.Audio
             var emitter = playback.Emitter;
             if (emitter.Current != null) Finish(emitter.Current, AudioCompletion.Stopped);
             if (playback.Handle.IsFinished || disposed) return;
-            emitter.Pending = null; emitter.Current = playback; emitter.Transition = null;
+            emitter.Pending = null; emitter.Current = playback; emitter.Transition = default;
             emitter.Envelope = playback.Options.FadeInSeconds > 0 ? 0 : 1;
             var source = emitter.Source;
             host.ConfigureSource(source, playback.Handle.Category);
-            source.clip = playback.Lease.Clip; source.loop = playback.Options.Loop;
+            source.clip = playback.Clip; source.loop = playback.Options.Loop;
             source.pitch = playback.Options.Pitch; source.ignoreListenerPause = playback.Options.IgnoreGamePause;
             ApplyGain(emitter); source.Play(); playback.StartedFrame = Time.frameCount;
             playback.Handle.State = AudioPlaybackState.Playing;
@@ -327,11 +336,12 @@ namespace Controller.Audio
             RemoveActive(playback);
             var cancel = playback.CancelLoad; playback.CancelLoad = null;
             var lease = playback.Lease; playback.Lease = null;
+            playback.Clip = null;
             var emitter = playback.Emitter;
             if (emitter != null)
             {
-                if (emitter.Pending == playback) { emitter.Pending = null; emitter.Transition = null; emitter.Envelope = 1; }
-                if (emitter.Current == playback) { emitter.Source.Stop(); emitter.Source.clip = null; emitter.Current = null; emitter.Transition = null; emitter.Envelope = 1; }
+                if (emitter.Pending == playback) { emitter.Pending = null; emitter.Transition = default; emitter.Envelope = 1; }
+                if (emitter.Current == playback) { emitter.Source.Stop(); emitter.Source.clip = null; emitter.Current = null; emitter.Transition = default; emitter.Envelope = 1; }
             }
             Recycle(emitter);
             if (reason != null) { LastFailure = reason; host.ReportFailure(reason); }
@@ -346,11 +356,15 @@ namespace Controller.Audio
             using var mutation = callbacks.Begin();
             SyncListenerPause();
             var p = Find(handle); if (p == null) return false;
-            if (handle.State == AudioPlaybackState.Loading) Finish(p, AudioCompletion.Cancelled);
-            else if (handle.State == AudioPlaybackState.Paused) Finish(p, AudioCompletion.Stopped);
+            StopPlayback(p, seconds, target); return true;
+        }
+        private void StopPlayback(Playback p, float seconds, float target)
+        {
+            if (p.Handle.IsFinished) return;
+            if (p.Handle.State == AudioPlaybackState.Loading) Finish(p, AudioCompletion.Cancelled);
+            else if (p.Handle.State == AudioPlaybackState.Paused) Finish(p, AudioCompletion.Stopped);
             else if (seconds <= 0) Finish(p, AudioCompletion.Stopped);
-            else p.Emitter.Transition = new Tween { Start = p.Emitter.Envelope, Target = target, Duration = seconds, Completed = () => Finish(p, AudioCompletion.Stopped) };
-            return true;
+            else p.Emitter.Transition = new Tween { Start = p.Emitter.Envelope, Target = target, Duration = seconds, Completion = TweenCompletion.Stop, Playback = p };
         }
         public bool Pause(AudioHandle handle, bool pause)
         { SyncListenerPause(); var p = Find(handle); if (p == null) return false; handle.UserPaused = pause; ApplyPause(p); return true; }
@@ -372,7 +386,8 @@ namespace Controller.Audio
         {
             if ((background ? backgroundPaused : gamePaused) == paused) return;
             if (background) backgroundPaused = paused; else gamePaused = paused;
-            foreach (var p in active.ToArray()) ApplyPause(p);
+            // ApplyPause only updates native sources and handle state; no external callbacks.
+            foreach (var p in active) ApplyPause(p);
         }
         public void SetMuted(AudioChannel channel, bool value)
         {
@@ -382,14 +397,21 @@ namespace Controller.Audio
         public void StopCategory(AudioCategory? category, bool loopOnly, float seconds, float target = 0f)
         {
             using var mutation = callbacks.Begin();
-            var selected = active.FindAll(p => (!category.HasValue || p.Handle.Category == category) && (!loopOnly || p.Options.Loop));
-            foreach (var p in selected) if (p.Handle.State == AudioPlaybackState.Loading) Stop(p.Handle, 0);
-            foreach (var p in selected) if (!p.Handle.IsFinished) StopAt(p.Handle, seconds, target);
+            SyncListenerPause();
+            var selected = RentSnapshot();
+            try
+            {
+                foreach (var p in active)
+                    if ((!category.HasValue || p.Handle.Category == category) && (!loopOnly || p.Options.Loop)) selected.Add(p);
+                foreach (var p in selected) if (p.Handle.State == AudioPlaybackState.Loading) StopPlayback(p, 0, target);
+                foreach (var p in selected) StopPlayback(p, seconds, target);
+            }
+            finally { ReturnSnapshot(selected); }
         }
         public void FadeBus(AudioChannel channel, float target, float seconds, bool stopAfter)
         {
             using var mutation = callbacks.Begin();
-            var index = (int)channel; busTweens[index] = null;
+            var index = (int)channel; busTweens[index] = default;
             if (stopAfter)
             {
                 StopCategory(channel == AudioChannel.Master ? (AudioCategory?)null : (AudioCategory)(index - 1), false, seconds, target);
@@ -401,15 +423,21 @@ namespace Controller.Audio
         public void FadeLegacy(int bank, float target, float seconds, bool stopAfter)
         {
             using var mutation = callbacks.Begin();
-            bankTweens[bank] = null;
-            var selected = active.FindAll(p => p.Bank == bank);
-            foreach (var p in selected) if (p.Handle.State == AudioPlaybackState.Loading) Finish(p, AudioCompletion.Cancelled);
-            foreach (var p in selected)
+            bankTweens[bank] = default;
+            SyncListenerPause();
+            var selected = RentSnapshot();
+            try
             {
-                if (p.Handle.IsFinished) continue;
-                if (stopAfter) StopAt(p.Handle, seconds, target);
-                else p.Emitter.Transition = null;
+                foreach (var p in active) if (p.Bank == bank) selected.Add(p);
+                foreach (var p in selected) if (p.Handle.State == AudioPlaybackState.Loading) Finish(p, AudioCompletion.Cancelled);
+                foreach (var p in selected)
+                {
+                    if (p.Handle.IsFinished) continue;
+                    if (stopAfter) StopPlayback(p, seconds, target);
+                    else p.Emitter.Transition = default;
+                }
             }
+            finally { ReturnSnapshot(selected); }
             if (!stopAfter)
             {
                 bankGains[bank] *= reserved[bank].Envelope;
@@ -448,20 +476,25 @@ namespace Controller.Audio
             SyncListenerPause();
             for (int i = preparations.Count - 1; i >= 0; i--) CheckPreparation(preparations[i]);
             bool gainsChanged = false;
-            for (int i = 0; i < 4; i++) if (busTweens[i] != null)
-            { gainsChanged = true; var t = busTweens[i]; busGains[i] = t.Advance(delta); if (t.Done) busTweens[i] = null; }
-            for (int i = 0; i < 5; i++) if (bankTweens[i] != null)
-            { gainsChanged = true; var t = bankTweens[i]; bankGains[i] = t.Advance(delta); if (t.Done) bankTweens[i] = null; }
+            for (int i = 0; i < 4; i++) if (busTweens[i].Active)
+            { gainsChanged = true; ref var t = ref busTweens[i]; busGains[i] = t.Advance(delta); if (t.Done) t = default; }
+            for (int i = 0; i < 5; i++) if (bankTweens[i].Active)
+            { gainsChanged = true; ref var t = ref bankTweens[i]; bankGains[i] = t.Advance(delta); if (t.Done) t = default; }
             int iSource = 0;
             while (iSource < updating.Count)
             {
                 var emitter = updating[iSource]; var p = emitter.Current;
                 bool envelopeChanged = false;
-                if (emitter.Transition != null && (p == null || !Paused(p)))
+                if (emitter.Transition.Active && (p == null || !Paused(p)))
                 {
                     envelopeChanged = true;
-                    var tween = emitter.Transition; emitter.Envelope = tween.Advance(delta);
-                    if (tween.Done) { emitter.Transition = null; tween.Completed?.Invoke(); }
+                    ref var tween = ref emitter.Transition; emitter.Envelope = tween.Advance(delta);
+                    if (tween.Done)
+                    {
+                        var completion = tween.Completion; var target = tween.Playback; tween = default;
+                        if (completion == TweenCompletion.StartPending) Start(target);
+                        else if (completion == TweenCompletion.Stop && ReferenceEquals(emitter.Current, target)) Finish(target, AudioCompletion.Stopped);
+                    }
                 }
                 if (envelopeChanged) ApplyGain(emitter);
                 p = emitter.Current;

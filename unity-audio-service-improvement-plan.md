@@ -2,9 +2,9 @@
 
 文件日期：2026-09-30
 
-文件版本：1.15
+文件版本：1.16
 
-狀態：R11～R15 已修正，單音效計數索引與可選閒置縮池已完成；205 項 PlayMode、14 項 EditMode／Reload、78 項 macOS Player 選定測試通過，含實際 Addressables catalog 更新（見 5.12）；第三階段套件化尚未開始
+狀態：BGM 載入、正常播放配置與批次控制優化完成；219 項 PlayMode、18 項 Editor／Reload、101 項 macOS Player 選定測試於無圖形／Metal 模式各通過（見 5.13）；第三階段套件化尚未開始
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。
 
@@ -671,6 +671,66 @@ AudioSettings 的事件訂閱在 Initialize 使用先解除再註冊，Shutdown 
 
 本輪正式前版、核心版與最終來源快照、CSV／XML 摘要及雜湊在 `work/reliability-repair-20260930/`；完整 Editor XML／log 為 `work/stage-two-hardening/repair-final20260930.*`、`repair-edit20260930.*`，Player 證據在 `work/reliability-repair-20260930/player/`。前兩次 Player 紀錄保留於 `player-attempt1/`、`player-attempt2/`，原始缺陷證據仍在 `work/system-audit-20260930/`。測試與工具繼續依使用者規則僅保留本機、由 Git 忽略；README／CHANGELOG 記錄對外契約。
 
+### 5.13 BGM 載入、播放配置與批次控制優化（2026-09-30）
+
+本輪依使用者核准的三項方向實作，保留 §5.12 的修正及可選擴充清單。測量來自本專案本機 A/B，不以開源專案的效能數字代替實測，也沒有搬入其他音訊框架。
+
+**完成的修改**
+
+- BGM：以兩首範例的副本比較原設定、背景解壓、Streaming、Compressed In Memory。正式兩首 BGM 改用 Streaming＋背景載入，關閉資料預載，品質／取樣率不變；SFX／Voice 不變。加入明確選用的 Audio Imports 選單，以及 DebugMenu 的初始化 → 聲源預熱 → PrepareClip → 播放／取消範例。
+- 播放配置：公開 PlayOptions 維持 class，接受請求後才製作內部 readonly struct 快照；淡變狀態改為 struct，使用動作種類與目標播放資料取代 Tween 物件／閉包。值資料以 ref 累積時間，完成前先清掉舊動作，保持暫停與聲源重用正確。
+- 素材持有：直接傳入外部 clip 不再製作無釋放動作的 lease；駐留快取可直接取得獨立 user lease，省去載入回呼。未改公共 lease、provider 釋放排序、快取保留或舊 handle 晚訂閱語意。
+- 大量控制：handle 保存僅內部可用的播放引用，完成即清空；查找不再掃描清單或產生 predicate 閉包，不另建 Dictionary。批次停止直接使用已選取的 Playback，快照清單以 try/finally 歸還、清空並可重入重用；暫停迴圈不製作沒有必要的陣列。
+- 保留有序 active 清單與 Remove 的線性成本，因此 StealOldest／回呼順序不變。256 個暖機批次停止已降到約 0.17 ms，現有量測不足以支持換掉容器或進一步池化 Playback。handle 增加一個內部引用欄位，快照緩衝會保留容量；首次建立／擴張仍有配置。
+
+**量測方法與校驗**
+
+同機 Unity 6000.6.3f1 Editor；預熱 256 個來源，24／64／256 聲音各暖身後測 7 次，中位數如下。CPU 包含相同的 Profiler／原生回呼量測負擔，沒有設定 CI 時間門檻。
+
+.NET `GC.GetAllocatedBytesForCurrentThread` 回傳 0，批次 Editor 的 RawFrameDataView 也未取得有效幀，這些失敗結果未採用。改用已安裝 Unity 的官方 `IUnityProfilerCallbacks` API，讀取 GC.Alloc 第一筆整數 metadata；thread-local 記錄限定在指定的主執行緒呼叫區間，不在回呼中配置物件。已知 4,096-byte 陣列讀到 **4,128 bytes、1 次事件**，各區間檢查 metadata 型別，並與 ProfilerRecorder 事件總數交叉檢查。這個原生測量程式與測試只留本機，不是正式 Runtime 的依賴。
+
+| 256 聲音測點 | CPU 前 → 後（ms） | 配置 bytes 前 → 後 | 配置事件前 → 後 |
+| --- | --- | --- | --- |
+| 暖池外部 clip 播放 | 0.5364 → 0.5548 | 103,936 → 86,528 | 2,304 → 1,536 |
+| 暖池駐留 ID 播放 | 0.5683 → 0.4978 | 163,840 → 108,544 | 2,560 → 1,536 |
+| 暖池外部 clip 淡入 | 0.5590 → 0.5006 | 114,176 → 86,528 | 2,560 → 1,536 |
+| 批次停止 | 0.2413 → 0.1652 | 51,588 → 0 | 778 → 0 |
+| 逐一反序停止 | 0.3289 → 0.1970 | 47,104 → 0 | 768 → 0 |
+| 逐一暫停／恢復，共 512 次 | 0.2486 → 0.0272 | 77,824 → 0 | 1,024 → 0 |
+| 設定批次淡出停止 | 0.1970 → 0.0125 | 94,596 → 0 | 1,290 → 0 |
+
+24／64 聲音批次停止為 0.0258 → 0.0175 ms／0.0605 → 0.0416 ms；駐留 ID 播放為 0.0604 → 0.0570 ms／0.1521 → 0.1350 ms。外部 clip 一般播放的 CPU 沒有穩定改善，保留的收益是配置減少；不同執行的 EntityId 字串長度也會影響少量 bytes。零配置只適用於已暖機、沒有使用者完成回呼的上述控制路徑，不代表整個服務零 GC。
+
+持續負載維持最多 64 聲音，約每 1/60 秒替換 8 個，共 1,800 批／14,400 次播放。呼叫配置合計 **11,853,824 → 6,105,600 bytes**，降低約 48%；整個 Editor 程序觀察到的 GC.CollectionCount(0) 增量 **11 → 6**。呼叫 CPU p99 為 0.1260 → 0.1015 ms；最大值反而由 0.1635 → **3.3913 ms**，後者區間同時有一次 GC。這證明配置壓力下降，**不證明 GC 尖峰已消除或遊戲幀率提升**。GC／幀觀察包含 Editor 和測試框架；CSV 的 frameMilliseconds 是每批結束時的一幀樣本，不是全部幀的完整尖峰追蹤。
+
+**長音樂的匯入 A/B**
+
+副本維持同品質與取樣率，每種設定 3 次；先卸載資料再 LoadAudioData，讀取 Loaded 後播放，並檢查游標前進、暫停與尾端循環。以下是完整 Editor suite 的中位數：
+
+| 音樂／設定 | LoadAudioData 呼叫（ms） | 到 Loaded（ms，含幀等待） | Profiler 單一 clip bytes |
+| --- | --- | --- | --- |
+| ukulele_song／原同步解壓 | 227.5189 | 227.5200 | 24,469,697 |
+| ukulele_song／背景解壓 | 0.0083 | 257.0942 | 24,469,697 |
+| ukulele_song／Streaming＋背景 | 0.0095 | 1.1937 | 197,965 |
+| ukulele_song／Compressed In Memory＋背景 | 0.0157 | 0.7873 | 4,709,929 |
+| maou_bgm_acoustic50／原同步解壓 | 152.5056 | 152.5067 | 24,437,441 |
+| maou_bgm_acoustic50／背景解壓 | 0.0060 | 170.7951 | 24,437,441 |
+| maou_bgm_acoustic50／Streaming＋背景 | 0.0063 | 1.0172 | 197,965 |
+| maou_bgm_acoustic50／Compressed In Memory＋背景 | 0.0146 | 0.8204 | 2,602,345 |
+
+選擇 Streaming 的依據是這兩首長音樂的 clip 記憶體與主執行緒準備成本；音訊解碼／磁碟工作仍會在播放期間發生。這裡的記憶體只取 Profiler.GetRuntimeMemorySizeLong(clip)，不是完整 Audio Memory 或 RSS。列出的 Audio Profiler counters 沒有取得有效 samples，以 NaN／0 samples 留存，**不以零值宣稱沒有 DSP 或串流 CPU 成本**。Prepared Play 呼叫很短也不等同耳端延遲；未進行長時間磁碟壓力、真實裝置聽感或所有平台驗收。
+
+Editor 工具只檢查被選取音檔；30 秒或 float PCM 估計 8 MiB 以上只是提示門檻，不是引擎限制。兩個可選 profile 僅修改 Default 的 loadType／preload 與背景載入，不覆蓋各平台設定；聲音用途及目標平台仍需自行實測選擇。
+
+**驗收與證據**
+
+- 完整 PlayMode **219／219**：既有行為、新增 12 項回歸及 8 項量測／觀察；涵蓋設定快照、淡變累積／取消／暫停、舊 handle、外部 clip 所有權、共用素材持有、批次重入、StealOldest 及載入範例停用。
+- Editor／Reload **18／18**：原 14 項加 4 項匯入檢查／profile 測試，包含品質、取樣率及平台 override 保留。
+- macOS Player 選定測試在 **無圖形／Metal 圖形模式各 101／101** 通過，包含真實 packed address／GUID、HTTP catalog／AssetBundle 更新、程式音訊重設、新增控制回歸及四種 BGM 設定各三次的游標／暫停／循環驗證。Player clip 回報約 24.44～24.47 MB → 197,508 bytes，與 Editor 的方向一致。Metal 模式此輪沒有重現前輪停滯；並未因此宣告已找出或修復 Unity 圖形問題，實際遊戲場景畫面／主觀聽感、實體裝置拔插及其他平台仍待驗證。
+- 本輪基準、副本比較、CPU／bytes／GC CSV、前後來源與摘要位於 `work/performance-refinement-20260930/`；Editor XML／log 位於 `work/stage-two-hardening/refine-*.{xml,log}`。量測基準為 `refine-native-before2`，最終 Editor 對照為 `refine-full`；先前未通過的量測校驗與兩次 Player runner 嘗試另外保留，不混入成功結果。Player 初次失敗是 Test Framework 強制 ConnectToHost，Editor 已退出後約 10 秒產生連線錯誤；檢查已安裝 1.8.0 的 PlayerLauncher.cs 後，在僅供拆分執行的 build modifier 移除該旗標及自動 Profiler 連線，沒有忽略音訊錯誤或放寬行為斷言。
+
+參考：[Unity 音訊匯入](https://docs.unity3d.com/6000.0/Documentation/Manual/class-AudioClip.html)、[Audio Profiler 指標定義](https://docs.unity3d.com/6000.0/Documentation/Manual/ProfilerAudio.html)、[GC.Alloc metadata 範例](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Profiling.RawFrameDataView.GetSampleMetadataAsLong.html)；實際量測 API 以本機 Unity 6000.6.3f1 的 `Contents/Resources/PluginAPI/IUnityProfilerCallbacks.h` 與 `IUnityProfiler.h` 為準。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -701,7 +761,7 @@ Addressables 整合獨立成 adapter 套件／assembly，隔離全部相關引�
 
 ### 6.3 相容性、本機測試與 CI 建置
 
-目前專案已升級至 Unity `6000.6.3f1`，後續先在此環境補齊播放與建置基準。原始審查版本 `6000.2.6f2` 保留作歷史比較；兩處 API 修正及第一、第二階段 PlayMode 已通過；Addressables content build 與 Player 尚未驗證，不能視為完整部署相容性驗收。Unity 2022／2021 等其他版本只有在實際通過編譯與測試後，才列為已驗證支援。
+目前專案已升級至 Unity `6000.6.3f1`，後續先在此環境補齊播放與建置基準。原始審查版本 `6000.2.6f2` 保留作歷史比較；兩處 API 修正及第一、第二階段 PlayMode 已通過；Addressables content build、macOS 無圖形 Player 播放與 HTTP catalog／AssetBundle 更新已通過 §5.12 驗證；§5.13 另完成 Metal 圖形模式的測試 Player；實際遊戲場景聽感、其他平台及實體裝置切換仍不算已驗收。Unity 2022／2021 等其他版本只有在實際通過編譯與測試後，才列為已驗證支援。
 
 EditMode／PlayMode 回歸測試在本機執行，詳細結果放在受忽略的 work 目錄，摘要回填本文件。由於測試與輔助腳本不隨 Git 提供，遠端 CI 僅規劃使用已追蹤內容執行套件匯入／編譯與適當的範例建置，不引用本機測試或 Tools 腳本。Unity 授權與執行環境設定納入落地工作；本文件不預設相關憑證已備妥。
 
@@ -861,6 +921,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成暫停／靜音去重、可選聲源預熱與拒絕路徑優化，保留逐步前後量測與原子拒絕契約（170 項 PlayMode、14 項 EditMode／Reload，見 5.10）。
 - [x] 再次核對五個固定提交的開源專案與官方資料，新增九項邊界／對照測試並確認 R11～R15（179 項 PlayMode 中 172 通過／7 失敗，見 5.11）。
 - [x] 修正 R11～R15，完成按需計數索引、顯式閒置縮池與前後量測；205 項 PlayMode、14 項 EditMode／Reload、78 項 macOS Player 測試通過（見 5.12）。
+- [x] 完成 BGM 載入、正常播放配置及批次控制優化；219 項 PlayMode、18 項 Editor／Reload、101 項 macOS Player 於無圖形／Metal 模式各通過，含 bytes 校驗與持續 GC 觀察（見 5.13）。
 
 ## 12. 原專案與 Unity 技術依據
 
@@ -894,3 +955,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.13 | 2026-09-30 | 完成暫停／靜音同值去重、PrewarmSources 可選容量預熱、接納前判斷與拒絕配置減少；補逐步量測、20 項行為回歸與 1 項量測，170 項 PlayMode、14 項 EditMode／Reload 通過；保留 R10、handle、快照及生命週期契約 |
 | 1.14 | 2026-09-30 | 重新核對五個開源專案與 Unity／Addressables 官方資料，重現 Provider 釋放重入／例外、Listener 暫停誤判、音訊重設狀態與定位快取五類缺陷 R11～R15；新增九項測試，完整 179 項中 172 通過／7 失敗。列出修正順序及單音效索引／縮池候選；正式 C# 未修改，缺陷尚未修復 |
 | 1.15 | 2026-09-30 | 修正 R11～R15，明訂音訊重設 Failed／Cancelled 政策，加入 Provider 刷新世代、按需單音效計數索引與限量閒置縮池；205 項 PlayMode、14 項 EditMode／Reload、78 項 macOS 無圖形 Player 驗收通過，含真實 HTTP catalog／AssetBundle 更新；保留量測、失敗與修正紀錄及平台限制 |
+| 1.16 | 2026-09-30 | 完成 BGM Streaming／背景準備範例與選用匯入工具、值型設定與淡變、駐留素材直接取得、直接 handle 定位及批次快照重用；補校驗後的配置 bytes、持續 GC 觀察及 24／64／256 聲音量測，見 §5.13 |

@@ -1,5 +1,13 @@
 # 變更紀錄
 
+## Unreleased — BGM 載入、播放配置與批次控制（2026-09-30）
+
+- 兩首範例 BGM 改用 Streaming＋背景載入；保留品質／取樣率，SFX 與 Voice 設定不變。新增選用的 Audio Imports 檢查／Default profile，以及可取消的準備／播放 DebugMenu 範例。
+- 內部播放設定與淡變使用值資料，省去直接 clip 的空 lease 與駐留播放的載入回呼；公開 PlayOptions、handle、lease、晚訂閱及 Provider 釋放契約維持。
+- handle 直接定位播放資料，結束即清空；批次停止重用可重入快照並直接操作已找到的播放，維持 StealOldest 與回呼順序。
+- 同機 Editor、256 次駐留播放：配置 163,840 → 108,544 bytes；批次停止 0.2413 → 0.1652 ms，暖機控制測點無配置。持續負載配置約降 48%，仍觀察到 GC 同時發生的 3.39 ms 尖峰，不宣稱零 GC 或全面幀率改善。BGM 單一 clip 記憶體約 24.4 MB → 0.20 MB；不代表完整音訊記憶體。
+- PlayMode 219／219、Editor／Reload 18／18 通過；macOS Player 選定測試於無圖形與 Metal 圖形模式各 101／101 通過，含實際 packed content、HTTP catalog 更新及 BGM 設定比較。證據、量測方法與界線見改善計畫 §5.13；測試、原生量測工具與資料僅保留本機。
+
 ## Unreleased — R11～R15 可靠性修正、單音效索引與閒置縮池（2026-09-30）
 
 - 先提交播放終態、名額與聲源清理，再釋放 Provider lease 及派送通知，修正釋放重入造成超額接納或 Shutdown 後遺留 Loading。釋放例外會記錄且不妨礙其他清理與一次完成通知。
