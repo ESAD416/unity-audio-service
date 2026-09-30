@@ -1,12 +1,12 @@
 # Unity Audio Service 改善與成熟化計劃
 
-文件日期：2026-09-29
+文件日期：2026-09-30
 
-文件版本：1.7
+文件版本：1.14
 
-狀態：第一階段、第二階段及回呼／效能補強完成本機 Editor 驗收；第三階段尚未開始
+狀態：第一、第二階段核心與效能改善已完成既有本機 Editor 驗收；最新審查新增 R11～R15 五類待修邊界缺陷，完整 PlayMode 為 172 通過／7 失敗（見 5.11）；第三階段套件化尚未開始
 
-本文件整合專案審查、三階段改善目標，以及三個開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。
+本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。
 
 ## 1. 專案基準與審查範圍
 
@@ -345,6 +345,278 @@ Unity 自動重新序列化的 `ProjectSettings.asset`／`EditorSettings.asset` 
 
 本次完成定位到的更新／快取成本與顯式資料準備；尚未進行 Player、packed Addressables、平台長時間壓測、GC bytes、DSP CPU 或完整音訊記憶體量測。Catalog 索引／驗證、重要聲音保護、池容量政策、播放 owner、LRU 與 3D／DSP 功能仍留待需求明確後評估；第三階段尚未開始。
 
+### 5.6 套件化前再次搜尋與優化複查（2026-09-29）
+
+本輪依使用者要求重新搜尋目前可取得的開源專案與 Unity 官方資料，對照正式 Runtime `1a3086b`，並補做本機量測。這是研究與驗證紀錄；正式 Runtime 未修改，第三階段及第 10.1 節的可選擴充尚未開始。既有 118 項行為測試紀錄保留，本輪只執行新增的研究量測 fixture，不能視為完整回歸重跑。
+
+**本輪查核來源與範圍：**
+
+| 來源 | 固定版本／資料日期 | 實際查核與可參考部分 |
+| --- | --- | --- |
+| [AudioConductor](https://github.com/CyberAgentGameEntertainment/AudioConductor/tree/e35687772a3283c6264ecf709b50f9aec8985372) | GitHub HEAD `e356877`，2026-09-04；package 宣告 2.5.1 | 讀取播放控制、更新、池與驗證規則原始碼；使用 handle 索引、可重用移除清單、one-shot 交換移除，並有 Prewarm／Shrink 與重複 ID／缺失素材檢查 |
+| [LucidAudio](https://github.com/annulusgames/LucidAudio/tree/97baab11fce25f19999713b397031bc4aab60480) | GitHub HEAD `97baab1`，2023-07-10 | 讀取 AudioPlayer、Manager 與 AudioLinkTrigger；播放跟隨物件停用／銷毀的行為可作後續 owner／scope 參考。提交較舊，不據此宣稱支援目前 Unity 版本 |
+| [Unity3D-SoundManager](https://github.com/baratgabor/Unity3D-SoundManager/blob/b8e13d7082492d3b71d39fb425e47254ab6386a6/SoundManager.cs) | GitHub HEAD `b8e13d7`，2019-05-11 | 新增的歷史設計參考；核對 Inspector 資料轉 Dictionary 及初始聲源建立。僅參考索引／預熱方式，不作為套件替換或效能優劣依據 |
+| [Unity Open Project 1 音訊系統](https://github.com/UnityTechnologies/open-project-1/wiki/Audio-system) | 作者 Wiki，2021-07-30 | 文件說明啟動時建立 SoundEmitter 池與獨立 AudioConfig；本輪未執行或完整審查該專案 |
+
+JSAM、Carter Games、Unity Audio Pooling 的現有公開資料亦列入搜尋比較，先前固定版本的設計對應維持第 7 節紀錄。本輪未執行上述第三方專案，未測量它們與本服務的速度差，也未將第三方程式碼移入正式功能。下載的參考檔案與提交 metadata 只保存在受忽略的 `work/optimization-research-20260929/`。
+
+**可確認的改善空間：**
+
+| 項目 | 本專案證據 | 建議與優先程度 |
+| --- | --- | --- |
+| 音量更新去除重複工作 | `AudioController.SetVolume` 不因值相同而省略套用；ApplyMixerSettings 寫四個參數並 RefreshGains，返回後再 RefreshGains。已套用 Mixer 且 handler 廣播新值時，回傳事件再進一次 SetVolume，形成一次設定最多 8 次 SetFloat、4 次全池增益巡訪的路徑 | 近期優先候選：區分實際改變的參數、設定持久化與來源增益更新，合併重複套用。保留初始化、Mixer 備援、設定 Reset 與事件契約，不能只在最外層看到相同值就跳過所有工作 |
+| Catalog 索引與編輯時驗證 | `AudioCatalog.TryResolve` 每次巡覽 Entries／Aliases；同分類重複 ID／alias 目前由先找到者決定，缺少 authoring validation | 近期優先候選：建立分類＋ID／alias 索引，明確處理重複、空值與來源缺失；Catalog 變更及 RefreshClipProvider 後重建。索引需保留無 Catalog 時的字串 key 相容性。參考 [AudioConductor 重複 ID 規則](https://github.com/CyberAgentGameEntertainment/AudioConductor/blob/e35687772a3283c6264ecf709b50f9aec8985372/Packages/AudioConductor/Editor/Core/Tools/Validation/Rules/DuplicateCueIdRule.cs) |
+| 聲源池預熱與閒置保留政策 | 動態聲源在 Rent 時建立，停止後全部保留至 Shutdown；目前沒有預熱／縮池 API。已降低閒置 Tick 成本，仍保留峰值 GameObject／AudioSource | 有首次大量播放或峰值保留需求時評估，先量冷建立與 native 物件保留，再增加選用的預熱、閒置上限或縮池。參考 [AudioConductor ObjectPool](https://github.com/CyberAgentGameEntertainment/AudioConductor/blob/e35687772a3283c6264ecf709b50f9aec8985372/Packages/AudioConductor/Runtime/Core/Shared/ObjectPool.cs)；預熱聲源與 Preload／PrepareClip 準備素材是不同工作，不任意更改預設並發上限 |
+| handle 查找與批次清理 | Find 使用 active.Find；StopCategory 先 FindAll，再逐一查找與移除；Finish 的 List.Remove 亦有搜尋／搬移成本，部分取消／停止路徑會配置快照與 closures | 次要量測候選：以 handle 索引與適當的批次處理減少重複搜尋。可參考 [AudioConductor 更新流程](https://github.com/CyberAgentGameEntertainment/AudioConductor/blob/e35687772a3283c6264ecf709b50f9aec8985372/Packages/AudioConductor/Runtime/Core/Conductor.Update.cs)；保留 StealOldest 的時間順序及回呼重入安全，不直接共用一個可被巢狀呼叫覆寫的暫存清單，也不回收外部仍可能保留的 AudioHandle |
+| 按素材用途選擇匯入策略 | 五個正式 MP3 均為 loadType=0（Decompress On Load），preloadAudioData／loadInBackground 為 0；前次 ukulele_song 準備後約 24.5 MB 的量測仍有效 | 納入 Player 驗證：以短 SFX、長 BGM、長語音分別比較 Decompress On Load／Compressed In Memory／Streaming，記錄首次播放、DSP／Streaming CPU 與音訊記憶體。依 [Unity AudioClip 匯入文件](https://docs.unity3d.com/6000.0/Documentation/Manual/class-AudioClip.html) 評估 CPU／RAM／串流取捨，不把全部素材一律改成 Streaming |
+
+**新增量測方法與結果：** 同一台 macOS、Unity `6000.6.3f1` Editor，以正式 Runtime 原樣執行 `OptimizationResearchMeasurements.Capture`。各測點先暖身，量 7 次取中位數；計時使用 Stopwatch，GC 指標使用經已知配置校驗的 ProfilerRecorder sample Count。兩次嘗試取得 GC bytes 均未通過校驗，未採用這些數值；本輪配置數只代表事件次數。研究 fixture 最終 1／1 通過，原始結果為 `work/stage-two-hardening/research20260929c.xml`，量測資料為 `work/optimization-research-20260929/current-costs.csv`。
+
+| 測點 | 規模／操作數 | 中位數 | 判讀 |
+| --- | --- | --- | --- |
+| 現行 Catalog 查詢最後一筆 alias | 10／100／1,000 entries，各查詢 10,000 次 | 5.1023／48.1160／483.4649 ms | 確認查詢成本隨目錄大小增加；這是刻意選末筆的情境，不代表一般遊戲每幀的查詢量 |
+| Dictionary 索引原型，同一批查詢 | 10／100／1,000 entries，各查詢 10,000 次 | 0.4725／0.4878／0.5276 ms | 原型只在測試內建立；未整合正式 Catalog，未計索引建置、額外記憶體與更新成本，不能宣稱整體播放已有此改善 |
+| 聲源全部停止後，重設同一 Master 音量 | 曾建立 256 個動態聲源；無 Mixer／handler，1,000 次 | 16.1031 ms，配置事件 0 | 同值設定仍會巡訪歷史峰值聲源；單次約 0.0161 ms |
+| 聲源全部停止後，交替更新 Master 音量 | 同上；無 Mixer／handler，1,000 次 | 23.8237 ms，配置事件 0 | 現行更新基準 |
+| 同上，綁定會回傳 VolumeChanged 的 handler | 同上；無 Mixer，1,000 次 | 39.7743 ms，配置事件 0 | 測試 handler 僅模擬設定同步，不寫 PlayerPrefs；增加的同步路徑有可量測成本 |
+| 同上，啟用原始 Mixer | 256 個動態聲源峰值、handler；1,000 次 | 41.7449 ms，配置事件 0 | 單次約 0.0417 ms；不能把 1,000 次總和當成一般滑桿每幀成本 |
+| 批次停止播放 | 暖池 24／64／256 個循環聲音，各停止一整批 | 0.0210／0.0557／0.2192 ms；103／264／1,034 次配置事件 | 有減少配置的空間，但本次耗時量級不支持將它列為阻擋套件化的效能問題 |
+
+Catalog 原型比較交替執行順序，資料為每筆一個 alias；未測重複 alias 的正式衝突政策。聲源量測使用四秒靜音 clip，峰值另含 5 個相容聲源；每次停止後核對池重用且 Playing 歸零。這些是局部 Editor 操作成本，不是完整 frame time、音訊混音、實機播放延遲或第三方效能對比；依 [Unity 目標平台效能指引](https://docs.unity.com/en-us/engine/6000.6/manual/analysis/profiler/profiling-applications/profiling-collect-data-introduction)，正式預算仍需以 Player／目標裝置補驗。
+
+**決策：** 保留進入套件化的方向；將音量更新與 Catalog 索引／驗證列為近期改善候選，聲源池政策與匯入策略依場景及平台量測決定，批次清理列次要。第 10.1 節四項可選擴充不因此改成必做。後續實作每一候選時，分開保留前後基準及相容性回歸，避免把數項改動的總效果歸因到單一修改。重跑方式與研究限制見本機 `work/optimization-research-20260929/README.md`。
+
+### 5.7 音量去重與 Catalog 索引／驗證實作（2026-09-30）
+
+依使用者同意實作第 5.6 節兩項近期候選。正式 Runtime 基準為 `1a3086b`，先重新取得當日基準，再分別完成音量及 Catalog 改善；不是拿前一天數字或 Dictionary 原型直接當成正式程式的改善結果。第三階段尚未開始，第 10.1 節擴充維持可選。
+
+**完成內容與相容性：**
+
+- `AudioController.SetVolume` 只在正規化數值改變時套用音訊；只寫入改變的 Mixer 參數，比較三個分類的聲源備援增益後，必要時才巡訪聲源。相同數值仍可交給 handler 儲存先前的暫時值，並可同步以 `applyStored=false` 綁定的 handler。設定事件的回傳不再重複套用音訊。初始化及 `SetMixer` 仍完整套用四通道，Reset、無 Mixer 與缺少參數的備援保留。
+- `AudioSettingsPlayerPrefs` 直接選取通道 key／預設值，移除每次變更建立的 key 陣列；自訂 key、正規化、延後 Flush 與設定事件不變。
+- `AudioCatalog` 以分類＋字串 tuple 建立 ID／alias 索引，保留大小寫敏感、Entries 中先出現者優先，以及原本無法解析時的字串來源備援。無效 ID 的首筆 alias 仍不會偷偷改選後面的素材；Inspector 會指出問題。Entries 為 null 現安全視為空目錄。
+- 初始化／重新啟用及 `RefreshClipProvider` 重建索引；刷新時先公布新索引，再取消舊需求，回呼內新增的播放可取得新映射。直接查詢可偵測 Entries 陣列替換；Editor 修改與反序列化只令本物件索引失效，下次查詢重建。直接修改既有 entry／alias 內容後，獨立使用者呼叫 `RebuildIndex`；服務使用者呼叫 `RefreshClipProvider` 同時處理快取。索引不在每次查詢時遍歷資料偵測修改。
+- 新增 `GetValidationIssues` 及獨立的 `Controller.Audio.Editor` assembly／Catalog Inspector，檢查重複 ID／alias、空 entry／key、前後空白、無效分類、缺少內建來源 key 及負數 MaxInstances。驗證不改資料、不載入素材；有來源 key 不代表 Resources 路徑、Addressables 建置或自訂 Provider 一定有素材，實際可載入性仍由 Provider／Player 驗收確認。Inspector 支援修改、Undo／Redo 與手動重新檢查。
+
+**當日效能比較：** 同一台 macOS、Unity `6000.6.3f1` Editor，各點暖身後取 7 次中位數。基準 `core-before20260930.csv`、只修改音量後的 `core-volume20260930.csv`、兩項實作完成後的 `core-full20260930.csv`，皆保存在 `work/core-optimization-20260930/`。下表以當日基準與最終正式實作比較。
+
+| 測點 | 規模／操作數 | 改善前 | 改善後 |
+| --- | --- | --- | --- |
+| Catalog 查詢最後一筆 alias | 10／100／1,000 entries，各 10,000 次 | 4.4414／42.0219／423.0434 ms | 0.7106／0.6695／0.6876 ms |
+| 停止後重設同一 Master 音量，無 Mixer／handler | 256 個動態聲源峰值，1,000 次 | 14.2255 ms | 0.0068 ms |
+| 停止後交替更新 Master 音量，無 Mixer／handler | 同上，1,000 次 | 20.2245 ms | 15.2873 ms |
+| 同上，加入設定事件同步 handler | 同上，1,000 次 | 34.6994 ms | 15.3765 ms |
+| 加入原始 Mixer 與設定事件同步 handler | 同上，1,000 次 | 36.8321 ms | 0.1967 ms |
+| 原始 Mixer＋實際 PlayerPrefs handler | 同上，1,000 次，不含 Flush | 37.5265 ms；1,000 次配置事件 | 0.9156 ms；0 次記錄到的配置事件 |
+
+聲源峰值另含 5 個相容聲源，全部停止後才量音量設定。無 Mixer 且音量實際改變時，仍須更新聲源；此路徑維持對歷史池峰值的巡訪。原始 Mixer 與同步 handler 的改善後單次成本約 0.000197 ms，1,000 次總和不代表一般遊戲每幀負載。Catalog 為最末筆別名情境，不代表實際查詢分布。GC 欄僅是經校驗的 ProfilerRecorder 配置事件次數，不是 bytes，也不宣稱服務整體零 GC。PlayerPrefs 測試使用獨立隨機 key，結束後移除，不包含磁碟 Flush 成本。
+
+**索引代價：** `CatalogIndexMeasurements` 對每個規模重建 100 次、量 7 組。10／100／1,000 entries（各一個 alias）每次重建約 0.000927／0.008156／0.093747 ms；每次記錄到 3 次配置事件。以 32 個 Catalog 共用相同 authoring 資料、建立索引前後 `GC.GetTotalMemory(true)` 差額估算並取 7 次中位數，1,000 entries 每個索引約增加 90,240 bytes（約 88 KiB）管理記憶體。已知 2 MiB 配置校驗讀到約 1.88 MiB，通過量級檢查；此為受 Editor／GC 雜訊影響的保留量估算，非精確配置 bytes，不含 entry／字串、native 素材或音訊資料。原始數值與範圍見 `core-full20260930-catalog-build.csv` 及 `summary.json`。
+
+**回歸結果：**
+
+| 驗收 | 結果 | 範圍與檔案 |
+| --- | --- | --- |
+| 音量獨立驗收＋量測 | 16／16 通過 | 15 項設定測試及 1 項量測，`work/stage-two-hardening/core-volume20260930.xml` |
+| 完整 PlayMode | 134／134 通過 | 既有 118 項行為＋7 項音量＋6 項 Catalog 整合＝131 項行為，另 3 項量測；`core-full20260930.xml` |
+| EditMode＋Reload | 14／14 通過 | 12 項 Catalog 索引／驗證及 2 項關閉 Domain／Scene Reload 的生命週期測試；`core-edit20260930.xml` |
+
+Catalog 驗證包含與舊線性解析器比較的衝突資料案例、同分類首筆優先、跨分類與大小寫、陣列替換、原地修改後刷新、SerializedObject／JSON 反序列化、舊字串入口、alias 並發限制、刷新保留播放中 handle，以及取消回呼重入時的新映射。音量驗證涵蓋相同暫時值轉儲存、新 handler 同步、單參數寫入、Mixer 切換／缺參數、Reset、重啟及原有回呼例外測試。
+
+測試／量測／輔助資料維持本機忽略，不成為正式依賴。尚未驗證 Player、packed Addressables、實機音訊 CPU 或其他 Unity 版本。套件化前的兩項近期改善已完成本機驗收；下一階段依第 6 節進行 UPM 分離及部署驗證。重跑方法與限制見 `work/core-optimization-20260930/README.md`。索引失效回呼的使用依據：[Unity OnValidate](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/ScriptableObject.OnValidate.html)、[ISerializationCallbackReceiver](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/ISerializationCallbackReceiver.html)。
+
+### 5.8 優化後再次搜尋與邊界補測（2026-09-30）
+
+依使用者再次搜尋的要求，對照第 5.7 節完成後的實際工作目錄，而非只查 Git HEAD。`runtime-hashes-before.json` 記錄本輪 Runtime／Editor C# 的 SHA-256；測試後逐一比對相同。本輪僅研究、補量與文件更新，未再修改正式 C#，也未執行／整合第三方套件。
+
+**本輪新增查核內容：**
+
+| 來源 | 本輪取得的固定版本 | 查核與採用界線 |
+| --- | --- | --- |
+| [AudioConductor](https://github.com/CyberAgentGameEntertainment/AudioConductor/tree/e35687772a3283c6264ecf709b50f9aec8985372) | HEAD `e356877`，2026-09-04，package 2.5.1；與前次相同 | 新增詳讀 CanPlay、ThrottleContext 與 [AtomicReject 測試](https://github.com/CyberAgentGameEntertainment/AudioConductor/blob/e35687772a3283c6264ecf709b50f9aec8985372/Packages/AudioConductor/Tests/Runtime/Core/ConductorThrottleTests.AtomicReject.cs)：先選擇淘汰候選，全部限制允許後才停止舊播放。其程式明列播放期間修改上限不受支援，不能宣稱已替我們驗證動態調低上限的情境 |
+| [CycloneGames.Audio／UnityStarter](https://github.com/MaiKuraki/UnityStarter/tree/c103e1e346113560fa6dd7679e705077b0160b64/UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio) | 儲存庫 HEAD `c103e1e`，2026-09-29；audio package 1.0.0 | 選讀 AudioPoolConfig、AudioManager 的活躍實例計數、TryShrinkPool、TrimIdleMemory，以及平台／記憶體設定。可參考初始池、閒置縮池與每次維護工作量上限；未完整審查龐大的 manager，也未實測其效能或採用裝置預設數值 |
+| [Rumyoonomicon AudioManager](https://github.com/perezromeojohn/unity-audiomanager/tree/06648b7984b3ec34d5d1e166fe3b39d5da8ea445) | HEAD `06648b7`，2026-08-31；package 1.1.3 | 核對啟動建立 SFX 聲源池與 activeByClip 分組。可參考預熱／分組概念；其播放入口仍有 Array.Find、全分組清理及池搜尋，不作為整體比本服務更快的依據 |
+| [Unity-AudioLoader](https://github.com/IvanMurzak/Unity-AudioLoader/tree/c178f48d85fc34c29f6181aa3cda79b51955f107) | HEAD `c178f48`，2026-05-28；package 1.0.6 | 核對非同步載入協調、記憶體／磁碟快取介面；未測其磁碟實作。MemoryCache 清除直接 DestroyImmediate clip，與本服務需保護播放中 lease 的生命週期不同，本輪不採用此清除方式，也不新增 UniTask 依賴 |
+
+Unity 官方資料另核對 [Audio Profiler](https://docs.unity3d.com/6000.0/Documentation/Manual/ProfilerAudio.html)、[AudioClip 匯入](https://docs.unity3d.com/6000.0/Documentation/Manual/class-AudioClip.html) 與 [Addressables 2.11.2 記憶體管理](https://docs.unity3d.com/Packages/com.unity.addressables@2.11/manual/memory-assets.html)。後續實機量測須區分 DSP CPU、Streaming CPU、real／virtual voices 與素材記憶體；釋放 lease 不保證 AssetBundle 立即卸載，過度積極清快取亦可能造成卸載後立即重載。
+
+**R10：本輪研究時重現的並發判斷邊界（後續已修正，見 5.9）。**
+
+1. 在無全域限制時播放 3 個循環聲音：1 個 SFX A、2 個 Voice。
+2. 播放中將 `MaxVoices` 降為 1，全域政策設為 `RejectNew`。
+3. 再請求 SFX A，單音效 `MaxInstances=1`、政策為 `StealOldest`。
+4. 實際結果：新 handle 為 `Rejected`，原 SFX A 卻已是 `Stopped`；兩個 Voice 繼續播放，總數由 3 降至 2。
+
+原因是 `MakeRoom` 在檢查單音效限制時立即執行 `Finish`，下一輪才發現全域條件仍無法接受新請求。建議先完整判斷是否能接納新播放、保留淘汰候選，確認後一次執行；遭拒絕的請求應不改變既有播放。這是參考原子拒絕設計後在本專案重現的行為問題，不是第三方效能推論。修正時須明確保留動態上限、Loading 預約、替換式 BGM／Voice 與回呼重入的既有規則；不能直接複製只支援穩定上限的演算法。驗收應增加此情境的「新請求拒絕、舊播放仍有效」回歸案例。
+
+**目前版本的新量測：** 使用 `PostOptimizationResearchMeasurements`，先暖身 managed/native 播放流程，再於 7 個新 Controller 分別比較首次建立動態聲源與同一池重用。Clip 是預先建立的十秒靜音資料、外部直接播放、固定 PlayOptions；不含素材載入／解碼。每個 Controller 另有 5 個相容聲源。以下均為 7 次中位數，單位 ms。
+
+| 測點 | 操作數 | 24 聲源 | 64 聲源 | 256 聲源 | 配置事件／判讀 |
+| --- | --- | --- | --- | --- | --- |
+| 新池首次播放一批 | 24／64／256 次 | 0.1758 | 0.4808 | 1.8787 | 346／910／3,604 次事件，包含集合成長與 native 聲源建立相關操作 |
+| 同一池停止後重播一批 | 同上 | 0.0466 | 0.1042 | 0.4176 | 240／640／2,560 次事件；每次播放仍約 10 次事件。兩列是同版冷／暖狀態，不是已實作新預熱 API 的前後改善 |
+| 全域上限已滿，連續請求被拒絕 | 1,000 次 | 1.3842 | 2.5094 | 8.1153 | 各規模均 9,000 次事件；256 規模單次約 0.0081 ms |
+| 單音效上限已滿，連續請求被拒絕 | 1,000 次 | 1.3951 | 2.5113 | 8.2018 | 各規模均 9,000 次事件；MakeRoom 仍掃描 active，拒絕前已建立 options／handle／playback 等資料 |
+| 播放中反覆設定相同 GamePaused=false | 1,000 次 | 0.1749 | 0.3487 | 1.4267 | 各規模均 1,000 次事件；SetPaused 仍建立 active 快照 |
+| 全部停止後反覆設定相同 SFX muted=false | 1,000 次 | 0.8518 | 1.9968 | 7.5054 | 0 次記錄到的事件，仍巡訪歷史峰值聲源 |
+
+計時含 ProfilerRecorder 記錄，配置事件以已知配置校驗，非 GC bytes。新池比較只支持「可將部分首次成本前移」；不代表所有冷播放成本皆由建池造成，也未測出 native 物件的保留記憶體。過載測點刻意同次呼叫 1,000 次，不能將總和當成一般每幀成本。沒有與第三方執行速度比較，亦沒有目標 Player／音訊執行緒驗證。
+
+**排序與後續決策：**
+
+- **優先修正 R10。** 先完善既有並發限制的結果一致性，再考慮降低拒絕路徑配置或維護活躍數索引；保留無限制快速路徑及外部持有 handle 的安全性。
+- **聲源預熱屬有量測支持的選用能力。** 大量同時起播時可預先建池；縮池須同時考量重新建立成本，依低用量時段／工作量預算處理，不任意套用外部專案的上限。
+- **相同 Pause／Mute 狀態去重屬次要改善。** 若呼叫端每幀反覆推送同值，才有持續成本；一般只在狀態切換時呼叫，收益有限。批次停止的舊候選也維持次要。
+- **素材匯入與快取保留政策繼續放入目標 Player 驗證。** LRU／TTL／按預算分批回收皆可研究，須保護 Loading、播放與預載群組，觀察重載次數和 AssetBundle 實際卸載；目前不預先宣稱能省多少 RAM 或改變全部 MP3 匯入設定。第 10.1 節可選擴充不升格為必做。
+
+研究 fixture 1／1 通過代表成功擷取測點與邊界觀察，**不代表 R10 行為正確或已修復**。JSON 記錄 `partialEvictionObserved=true`；本輪未重跑完整行為回歸，原 134／134、14／14 為第 5.7 節歷史驗收，不涵蓋這個新增邊界。原始 XML 在 `work/stage-two-hardening/post-research20260930.xml`，CSV、並發 JSON、來源快照與固定版本 metadata 在 `work/post-optimization-research-20260930/`，皆僅保留本機。
+
+### 5.9 R10 並發拒絕修正與驗收（2026-09-30）
+
+本節保留 R10 修正完成當時的實作與量測；後續接納流程拆分及新增優化見 5.10，原子拒絕規則仍保留。
+
+依使用者同意先修 R10，正式 C# 僅修改 `AudioPlaybackEngine`；保留第 5.7 節已完成的音量／Catalog 改善。設計參考為第 5.8 節 AudioConductor 的「所有限制允許後才淘汰」原則，實作依本服務的動態上限、Loading 與相容播放分支自行撰寫，未搬入第三方程式或依賴。
+
+**修正後的行為：**
+
+- `MakeRoom` 先計數並算出單音效與全域各需替換多少個實例，兩者均可滿足才執行停止。單音效候選所釋出的名額先從全域需求扣除，保留單音效 `StealOldest` 可讓全域 `RejectNew` 接受新播放的既有行為。
+- 播放中調低上限本身不會停止舊聲音；後續 `StealOldest` 請求可一次替換多個，仍依「單音效最舊優先，再全域剩餘最舊」順序。Loading 與 Paused 均計入；被替換的 Loading 回報 `Cancelled`，已播放／暫停回報 `Stopped`。
+- 因並發限制而 `Rejected` 時，既有播放、待載入請求、lease 與完成通知不受影響。替換式 BGM／Voice／循環 SFX 的 pending 取消及轉場／淡出重設，移至接納之後；原 BGM 轉場得以繼續。
+- 保留同一替換分支的計數排除，舊非循環 SFX 仍獨立計數；沿用現有完成通知佇列，使 `Completed` 回呼看到本次狀態已完成，再把回呼內播放當成新請求。
+
+無限制路徑仍直接通過。有設定限制時先掃描 active；拒絕或不需替換時不建立候選快照。只有接受且確實需替換時，配置一個大小等於替換數量的陣列，保留選取與通知順序。本次目標是結果一致性，未加入活躍計數索引，也不宣稱替換路徑零配置。
+
+**實測證據：** Unity `6000.6.3f1`／Addressables `2.11.2`，本機 Editor。
+
+| 驗證 | 結果 | 證據 |
+| --- | --- | --- |
+| 修正前新增回歸 | 14 項中 6 項失敗、8 項通過 | 誤停播放、取消 Loading／BGM／Voice pending、打斷 BGM 轉場及淡出均被測試捕捉；`r10-before20260930.xml` |
+| 修正後相關回歸 | 67／67 通過 | 新增 14 項、核心 42 項、回呼 11 項；`r10-focused20260930.xml` |
+| 完整 PlayMode | 149／149 通過 | 145 項行為、4 項量測／觀察；`r10-full20260930.xml` |
+| EditMode／Reload | 本專案 14／14 通過 | 12 項 Catalog、2 項 Reload 生命週期；`r10-edit20260930.xml` 總計 15／15，另含 1 項 Addressables DocExample 的 `TestStub.RequiredTest`，不計入本專案覆蓋 |
+| 原研究情境再現 | 新 handle `Rejected`，舊 SFX 仍有效、兩個 Voice 仍有效，播放數 3 → 3 | `r10-full20260930-admission.json`：`partialEvictionObserved=false`；修正前為 3 → 2、true |
+
+14 項新回歸另涵蓋動態調低兩種上限、多個候選的選取／完成順序、Loading 遲到交付、Paused 計數、拒絕時不釋放最後一份素材 lease、完成回呼再次播放，以及替換分支與舊 one-shot 的差異。
+
+完整回歸亦重跑第 5.8 節測點：1,000 次全域／單音效拒絕仍各記錄 9,000 次配置事件；24／64／256 聲源的暖池播放仍每次約 10 次事件。256 聲源的 1,000 次全域／單音效拒絕中位數為 8.2782／8.3755 ms（前次 8.1153／8.2018 ms）；暖池播放 256 次為 0.4178 ms（前次 0.4176 ms）。這些是同機 Editor 回歸觀察，不作效能提升或平台效能保證，亦未另量化新候選陣列的替換成本。
+
+XML 位於 `work/stage-two-hardening/`；本輪來源雜湊、修正前引擎備份及彙整在 `work/r10-admission-20260930/`；原研究與重跑 CSV／JSON 保存在 `work/post-optimization-research-20260930/`。新增測試為 `Assets/AudioService/Tests/ConcurrencyAdmissionTests.cs`，測試／工具／證據均依既定規則由 Git 忽略。本輪尚未執行 Player／packed content；聲源預熱、縮池、Pause／Mute 去重、E1～E4 與 UPM 套件化維持原規劃。
+
+### 5.10 狀態去重、聲源預熱與拒絕路徑優化（2026-09-30）
+
+依使用者確認的三項追加優化分步實作；這三步屬第二階段核心的後續改善，與第 6 節的套件化階段分開。正式 C# 修改限於 `AudioPlaybackEngine`、`AudioController` 與 `AudioPlayback`，未引入第三方程式或依賴。
+
+**完成內容與契約：**
+
+1. **暫停／靜音同值去重。** `SetGamePaused`、`SetBackgroundPaused` 與同通道 `SetMuted` 值相同時直接返回，不建立 active 快照、不巡訪聲源。真正改變暫停時仍沿用既有快照與套用流程；遊戲／背景／個別暫停各自獨立，新播放、延遲載入及池重用仍在 Start 套用當下狀態。
+2. **可選 `int PrewarmSources(int targetCount)`。** 主執行緒同步把動態聲源總數（使用中＋閒置）補到指定數量，五個相容聲源另外計算；回傳本次新建數量。非正數或服務未 Ready 回傳 0，不自動啟動；不呼叫就不額外預熱。預熱與一般播放共用建立流程，明確停止新聲源，預留 active／updating 清單容量；閒置聲源不進入每幀播放更新。重複呼叫只補不足、不縮池、不改 `MaxVoices`，播放超過容量仍按需擴充；Shutdown 清理動態聲源，重新初始化後可再預熱。預熱不取得 clip，資料準備仍使用 `PrepareClip`。
+3. **先判斷接納，再建立必要播放資料。** `TryPlanAdmission` 保留 R10 全部規則；一般入口只有全域限制時直接取 active.Count，包含 Loading／Paused。單音效限制及替換分支仍掃描；通過後才由 `StartAccepted` 複製設定、建立 Playback 並執行替換，載入回呼僅在確實需要載入時建立。設定快照在任何淘汰／Provider lease 釋放前完成；`PlayBgmHandle` 的循環覆寫移到這份快照，避免額外複製或修改呼叫端設定。handle 沒有完成訂閱者時不配置通知用閉包；有訂閱時的佇列、例外隔離及晚訂閱語意不變。
+
+拒絕仍回傳各自獨立的 handle、ID、原因及終態，沒有重用外部可能繼續持有的 handle。沒有新增單音效計數索引；其掃描成本仍存在，避免讓所有正常播放先承擔索引維護成本。無限制路徑仍直接通過。
+
+**同條件量測：** Unity `6000.6.3f1`／Addressables `2.11.2`，同一台本機 Editor、主執行緒。新增 `OptionalOptimizationMeasurements`，先暖身程式及 native 音訊流程，再於 24／64／256 聲源各跑 7 次，取中位數。外部 clip 為預先建立的十秒靜音資料，使用固定非 null PlayOptions；ID 測點透過本機測試 Provider 取得已駐留 clip，不含首次素材載入／解碼。計時含 ProfilerRecorder；空迴圈與已知配置分別校驗 0／非 0 事件，緩衝未滿。以下事件是 GC.Alloc 次數，非 GC bytes。
+
+基準為本輪修改前 `optional-before20260930.csv`，結果為最終完整回歸 `optional-full20260930.csv`；表中皆取 256 聲源，時間單位 ms。
+
+| 測點 | 操作數 | 修改前 → 修改後 | 配置事件前 → 後 |
+| --- | --- | --- | --- |
+| 重複 GamePaused=false | 1,000 | 1.3690 → 0.0016 | 1,000 → 0 |
+| 重複 GamePaused=true | 1,000 | 1.3988 → 0.0016 | 1,000 → 0 |
+| 重複 BackgroundPaused=true | 1,000 | 1.2150 → 0.0016 | 1,000 → 0 |
+| 真正切換遊戲暫停 | 200 | 1.7926 → 1.6552 | 200 → 200 |
+| 使用中重複 SFX muted=true | 1,000 | 7.4101 → 0.0018 | 0 → 0 |
+| 峰值停止後重複 SFX muted=false | 1,000 | 7.1281 → 0.0018 | 0 → 0 |
+| 全域上限拒絕，外部 clip | 1,000 | 8.3599 → 0.4486 | 9,000 → 5,000 |
+| 單音效上限拒絕，外部 clip | 1,000 | 8.2961 → 7.8607 | 9,000 → 5,000 |
+| 全域上限拒絕，字串 ID | 1,000 | 3.5427 → 0.2095 | 6,000 → 2,000 |
+| 單音效上限拒絕，字串 ID | 1,000 | 3.5625 → 3.3316 | 6,000 → 2,000 |
+| 暖池無限制播放，外部 clip | 256 | 0.4032 → 0.4034 | 2,560 → 2,304 |
+| 暖池全域有限制的成功播放 | 256 | 1.5427 → 0.4295 | 2,560 → 2,304 |
+| 暖池單音效有限制的成功播放 | 256 | 1.4475 → 1.3799 | 2,560 → 2,304 |
+| 暖快取 ID 成功播放 | 256 | 0.4095 → 0.4118 | 2,560 → 2,560 |
+
+配置拆分測點顯示：1,000 次外部 clip 的 ID 建立仍有 4,000 次事件，1,000 份 PlayOptions 快照有 1,000 次事件，1,000 個新 handle 有 1,000 次事件；「建立 handle 並直接完成、沒有訂閱者」由 2,000 降為 1,000 次事件。拒絕路徑移除了設定快照、Playback、載入用閉包與無訂閱通知閉包；外部 clip 請求仍有 ID 建立與獨立 handle 的成本。未命中 Catalog 的字串 ID 測點還會建立 AudioClipAddress，故不是零配置。單音效拒絕的時間小幅差異不作穩定加速保證，明確收益為配置事件減少；正常無限制／暖快取播放的時間接近，未看到明顯退步。
+
+**預熱的成本轉移：** 以下三列均為最終同版、256 個動態聲源的 7 次中位數；每個 Controller 另有 5 個相容聲源。
+
+| 最終版本測點 | 時間 ms | 配置事件 | 物件與播放狀態 |
+| --- | --- | --- | --- |
+| 未預熱，首次建立並播放 256 次 | 1.7089 | 3,348 | 動態聲源 0 → 256，播放 256 個 |
+| 載入階段先 `PrewarmSources(256)` | 0.9560 | 1,039 | 動態聲源 0 → 256，全部閒置、未載入 clip |
+| 預熱後首次播放 256 次 | 0.6305 | 2,304 | 動態聲源維持 256，無額外建源 |
+
+預熱與播放仍各有成本，這是將部分工作移到載入時機；預熱後首次播放也不等於已播放過再重用的成本。記錄的是物件數量，未量出完整 native／managed 保留記憶體，不能換算成裝置 RAM 節省或總遊戲效能提升。256 僅為壓測規模，不是建議預設預算。全域拒絕的 1,000 次也是批次測點，不能當成一般每幀負載。
+
+**驗收與本機證據：**
+
+| 範圍 | 結果 | XML 標籤 |
+| --- | --- | --- |
+| 修改前專用量測 | 1／1 通過 | `optional-before20260930` |
+| 狀態去重＋核心＋量測 | 47／47 通過 | `optional-state20260930` |
+| 加入預熱後相關驗收 | 56／56 通過 | `optional-prewarm-v320260930` |
+| 三項優化＋R10／回呼相關驗收 | 88／88 通過 | `optional-admission20260930` |
+| 完整 PlayMode | 170／170 通過：165 項行為、5 項量測／觀察 | `optional-full20260930` |
+| 本專案 EditMode／Reload | 14／14 通過：12 項 Catalog、2 項 Reload | `optional-edit20260930` |
+
+本輪新增 20 項行為回歸（狀態 4、預熱 9、接納 7）與 1 項量測。涵蓋重複狀態後新播放／載入完成、UI 例外與個別暫停、預熱容量與五個相容聲源區別、載入預約、超額播放、Shutdown 清理、獨立拒絕 handle、Provider 在 Acquire／Release 內修改呼叫端設定，以及完成事件例外與再次播放。R10 原研究情境仍為新 handle Rejected、舊聲音 3 → 3，`partialEvictionObserved=false`。
+
+XML／log 在 `work/stage-two-hardening/`；逐步 CSV、修改前／階段間 C# 備份、前後雜湊及彙整在 `work/optional-optimizations-20260930/`。測試、工具與證據維持 Git 忽略，正式程式不依賴它們。本輪無 Player／packed content 驗證；自動縮池、單音效計數索引、E1～E4 與 UPM 套件化仍未實作。
+
+### 5.11 再次開源／官方資料審查與缺陷重現（2026-09-30）
+
+依使用者要求重新搜尋，對照 **5.10 完成後的工作目錄版本**。本輪重點為 Provider 釋放邊界、Unity 全域暫停／音訊系統重設，以及 Addressables 對應更新；新增本機測試與文件，正式 Runtime／Editor C# 未修改。原有 SHA-256 基準全部相同，基準未含的兩個 Interface 檔案另核對與 HEAD 相同。以下為研究與待修清單，沒有把發現列為已修復。
+
+**重新核對的開源來源：** 使用 GitHub API 核對當日預設分支提交，再下載固定提交中相關的 30 個原始碼／package manifest 檔案。前四項提交與 5.8 相同，CarterGames 為本輪新增比較對象；版本號取自各 package.json。僅檢查相關子系統，未宣稱完整審計這些專案，也未執行或匯入第三方程式。
+
+| 專案與固定提交 | 版本 | 本輪檢查及適用界線 |
+| --- | --- | --- |
+| [AudioConductor — e356877](https://github.com/CyberAgentGameEntertainment/AudioConductor/tree/e35687772a3283c6264ecf709b50f9aec8985372) | 2.5.1 | 播放／更新、完成回呼的例外隔離測試、池的 Shrink 能力與 Addressables handle 釋放；作為狀態與資源生命週期的比較依據 |
+| [UnityStarter / CycloneGames.Audio — c103e1e](https://github.com/MaiKuraki/UnityStarter/tree/c103e1e346113560fa6dd7679e705077b0160b64/UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio) | 1.0.0 | AudioBankClipLease 先清除所有權，再逐項安全釋放；另有生命週期世代、主執行緒檢查、閒置縮池門檻。只參考局部設計，不引入其服務／UniTask 等依賴 |
+| [Simple-Unity-Audio-Manager — a28f36e](https://github.com/jackyyang09/Simple-Unity-Audio-Manager/tree/a28f36e6548045e9af1936bebe35b59b6134d8e6) | 3.1.1 | 檢查 AudioManagerInternal 與聲音／音樂 channel helper 的停用、背景暫停及播放進度；其循環與 channel 架構不直接等同本服務的獨立 handle |
+| [Unity-AudioLoader — c178f48](https://github.com/IvanMurzak/Unity-AudioLoader/tree/c178f48d85fc34c29f6181aa3cda79b51955f107) | 1.0.6 | 檢查載入、AudioSource 輔助與記憶體快取。清除快取會銷毀 clip，沒有本服務相同的播放 lease 契約，因此不直接搬用其清理方式 |
+| [CarterGames AudioManager — 44bb924](https://github.com/CarterGames/AudioManager/tree/44bb92407120032b1bacee376ec182b303c940b2) | 3.1.2 | 檢查池初始容量、借還與 AudioSourceInstance 狀態／重設；其借用會巡訪清單，不作為效能必定優於目前 Stack 池的依據 |
+
+**已重現的五類缺陷：** 測試環境為 Unity `6000.6.3f1`／Addressables `2.11.2`、本機 Editor PlayMode。每一列都有程式路徑與可重複的觸發條件；並非只因其他專案具備某功能就判定本服務有缺陷。
+
+| 編號 | 觸發條件與實際結果 | 原因與建議修正方向 |
+| --- | --- | --- |
+| R11 | 自訂 Provider 的 lease 釋放動作再次呼叫服務。MaxVoices=1、StealOldest 淘汰舊播放時，內層再 Play，結果內外兩個新 handle 都 Playing，總數變 2；內層改為 Shutdown，則 Ready=false 卻仍留下有效的 Loading handle、Diagnostics.Loading=1 | `StartAccepted` 在完成淘汰後直接接納，未防範釋放動作改變容量或服務世代。完成事件佇列只隔離 Completed 訂閱者，未涵蓋 lease release。需在外部程式執行前穩定內部狀態，並在接納流程保留容量／重新確認服務世代，確保重入也遵守上限與關閉契約 |
+| R12 | 自訂 Provider 的 lease release 拋例外。Stop 拋出該例外後，handle 仍 Playing、IsValid=true，但 Diagnostics.Playing=0；Completed 沒通知，第二次 Stop 回傳 false | `Finish` 先移除 active，再執行外部 Dispose，例外使 Recycle 與 handle 終態流程未執行。需保障必要清理與一次終態通知，即使 Provider 清理失敗仍保持一致；記錄例外，不能僅吞掉錯誤。另補多 lease／Shutdown 的同類驗收 |
+| R13 | 外部使用 `AudioListener.pause=true`，包括先暫停再 Play、以及 Play 後才暫停，十秒 one-shot 都在幾幀內被標成 Finished／Completed。改用本服務 SetGamePaused 或 IgnoreGamePause 的 UI 播放則通過對照 | Tick 將 `!AudioSource.isPlaying` 當成自然完成，但未納入 Listener 暫停。需區分外部全域暫停與真正播完，並明確定義淡入淡出在此期間的行為；僅使用本服務暫停 API 的一般流程未重現此問題 |
+| R14 | 以磁碟 BGM 素材循環播放，呼叫 AudioSettings.Reset 將 DSP buffer 1024 改為 512。Reset=true、收到一次 configuration callback，聲源 isPlaying=false，但 handle 與 Diagnostics 仍 Playing | 尚未處理 OnAudioConfigurationChanged。需定義重設後恢復可重播素材或結束失效 handle 的政策，保留原有暫停／靜音狀態；腳本產生的 clip 另需重建契約。本輪實際驗證的是程式觸發的 Reset，deviceChanged=false，沒有實測拔插耳機 |
+| R15 | 同一 Addressables key 先載入舊 clip、停止並釋放快取，替換 resource locator，直接用 Addressables.LoadAssetAsync(key) 已得到新 clip；呼叫本服務 RefreshClipProvider 再播放卻仍取得舊 clip，載入位置序列為 old → new → old | AddressablesAudioClipProvider 的 knownLocations 不失效，Controller 刷新僅更換 AudioClipStore。需加入明確的對應刷新／世代機制，重新解析 key，同時保護仍被舊播放持有的 lease。若不支援執行期 catalog 更新，文件需明列此限制；單純固定 catalog 冷載入未受此案例影響 |
+
+R11、R12 的必要前置步驟是呼叫 ReleaseUnusedClips 移除服務的快取保留，使最後一個播放停止時確實執行自訂 Provider 的 release；一般無回呼／不拋錯的 Provider 停止流程通過對照。R15 採可控的 ResourceLocationMap 與 ResourceProviderBase 重現對應失效，**尚未建置遠端 catalog／AssetBundle 的完整更新流程**。
+
+**官方依據與開源參考的作用：**
+
+- [Unity AudioListener.pause](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AudioListener-pause.html) 定義全域暫停及新請求從暫停狀態開始的行為；本服務的 Completed 結果與此暫停語意不一致。不是因為文件保證任何版本的 isPlaying 值，而是本機已驗證該值會觸發誤判。
+- [Unity Audio Settings](https://docs.unity3d.com/6000.0/Documentation/Manual/class-AudioSettings.html) 與 [OnAudioConfigurationChanged](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AudioSettings.OnAudioConfigurationChanged.html) 說明音訊重設後播放狀態需重建，腳本產生的素材也需另外處理。這是 R14 的預期行為依據，不是新 DSP 排程功能的需求。
+- [Addressables 2.11 catalog 管理](https://docs.unity3d.com/Packages/com.unity.addressables@2.11/manual/LoadContentCatalogAsync.html) 定義執行期 catalog 載入／更新；同時核對本機實際安裝 2.11.2 的 `Documentation~/LoadContentCatalogAsync.md`。官方更新機制不會自動清除本服務自行保存的 IResourceLocation；應以 R15 的測試證據區分模組快取與 AssetBundle 更新配置。
+- [CycloneGames AudioBankClipLease](https://github.com/MaiKuraki/UnityStarter/blob/c103e1e346113560fa6dd7679e705077b0160b64/UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/Runtime/AudioBankClipLease.cs) 提供先解除內部持有、再安全逐項釋放的參考；[AudioConductor 完成回呼測試](https://github.com/CyberAgentGameEntertainment/AudioConductor/blob/e35687772a3283c6264ecf709b50f9aec8985372/Packages/AudioConductor/Tests/Runtime/Core/ConductorCallbackTests.cs) 示範例外不應阻止後續通知。它們是設計比較，不代表第三方專案已驗證本服務的 R11／R12 或可直接套用修法。
+
+**仍有價值的效能候選：**
+
+| 候選 | 現有證據 | 採用條件與代價 |
+| --- | --- | --- |
+| 單音效並發查找索引 | 每次啟用 MaxInstances 仍巡訪 active；5.10 的 256 聲源、1,000 次同音效拒絕，ID 路徑約 3.33 ms、外部 clip 約 7.86 ms。這是先前同版量測，非新增修正後數字 | 代表性場景若有大量同音效請求，再評估按 category／ID 計數或成員索引。需處理 Loading／Paused、替換、取消、動態上限及重入，並比較正常播放的維護成本與記憶體；先修 R11，避免替錯誤狀態建立索引 |
+| 可選閒置聲源縮減 | 動態池目前保留歷史峰值到 Shutdown，PrewarmSources 也只增不減；已有 256 聲源峰值／閒置證據。AudioConductor ObjectPool 有 Shrink，CycloneGames 有閒置時間／使用率門檻 | 可先提供載入／換場時顯式 TrimIdleSources，僅銷毀閒置動態聲源，保留最低容量與每次處理預算。是否自動縮池需量測重建尖峰及 native 記憶體；目前是有意保留供重用，不能稱為記憶體洩漏 |
+
+來源：[AudioConductor ObjectPool](https://github.com/CyberAgentGameEntertainment/AudioConductor/blob/e35687772a3283c6264ecf709b50f9aec8985372/Packages/AudioConductor/Runtime/Core/Shared/ObjectPool.cs)、[CycloneGames AudioPoolConfig](https://github.com/MaiKuraki/UnityStarter/blob/c103e1e346113560fa6dd7679e705077b0160b64/UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/Runtime/AudioPoolConfig.cs)。本輪沒有建立上述兩項優化原型，也沒有估計未量測的加速比例或 RAM 節省。E1～E4 仍維持 10.1 的可選需求，不因比較專案有功能就提升為必要工作。
+
+**驗證結果與證據：**
+
+| 執行範圍 | 結果 | XML 標籤 |
+| --- | --- | --- |
+| 初次六個定向重現 | 0 通過／6 失敗，均為預期行為斷言失敗 | `system-audit20260930` |
+| 既有測試＋新增九項重現／對照 | 共 179 項：172 通過／7 失敗／0 略過；既有 170 項全通過，新測試 2 通過／7 失敗 | `system-audit-full20260930` |
+
+七個失敗對應五類缺陷：R11 兩項、R12 一項、R13 兩項、R14 一項、R15 一項。對照涵蓋普通 lease 停止與通知、服務 SetGamePaused 暫停／恢復，以及忽略全域暫停的 UI 聲音。沒有 C# 編譯錯誤或警告。新增測試保留「應有行為」斷言，因此完整 suite 目前確實為失敗，不將測試執行成功混同為系統驗收通過。
+
+測試位於 `Assets/AudioService/Tests/SystemAudit20260930Tests.cs`；XML／log 在 `work/stage-two-hardening/`；逐例 JSON、來源 manifest／SHA、前後正式 C# 雜湊及彙整在 `work/system-audit-20260930/`，皆沿用本機 Git 忽略。Reset 測試還原原始音訊配置，runner 保留／還原專案設定，未改 OS 音訊裝置。14 項 EditMode／Reload 是 5.10 的歷史通過結果，本輪未重跑。Player／packed content／真實裝置切換仍未驗證。
+
+**建議次序：** 先修 R11／R12 的釋放與生命週期一致性，再修 R13／R14 的 Unity 音訊狀態整合；R15 在需要執行期素材更新時一併補齊。以新測試轉為通過及既有回歸維持通過作為驗收，再決定單音效索引或縮池的效能工作。套件化前應處理已確認缺陷或明訂支援限制，不能只沿用 5.10 的 170／170 就宣告目前所有邊界已成熟。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -480,14 +752,29 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 
 ## 10. 後續擴充與待確認事項
 
-### 10.1 完成核心後再評估
+### 10.1 可選擴充計畫
 
-- 3D 位置、Transform 跟隨、距離衰減與空間音訊設定。
-- 雙聲源交叉淡化、前奏接循環、循環點與 DSP 排程／節拍同步。
-- 語音播放時降低背景音量、對話佇列、群組隨機／依序播放。
-- 完整 ScriptableObject 音效資產、音效庫掃描、波形與循環點編輯工具。
+以下四項列為依遊戲需求選用的後續計畫，目前均未實作、未排定時程，也不作為前三階段完成或目前套件化的必要條件。現行服務仍以 2D 音訊為主；啟動個別項目前，先確認使用情境、目標平台與可驗證的需求。
 
-這些功能不作為前三階段完成的必要條件。普通 BGM 切換在第一階段仍維持先淡出再淡入的既有形式，只修正其控制一致性。
+| 編號 | 可選能力 | 用途與遊戲情境 | 預計擴充範圍 |
+| --- | --- | --- | --- |
+| E1 | 3D 空間音效 | 聲音隨位置與距離改變，例如右側火堆的方向感、走遠後音量降低；2D 遊戲亦可依需求使用 | 單次播放的位置、Transform 跟隨、距離衰減與空間音訊設定；處理跟隨對象銷毀、場景卸載，以及池內聲源回收／重用時的完整重設 |
+| E2 | DSP 排程與進階音樂控制 | 依音訊時鐘安排起播，例如下一小節切換、前奏接循環，以及音樂段落串接 | 增加已排程但尚未起播的狀態與素材提前準備，定義取消、暫停、恢復及素材未及時就緒的政策；視需求加入雙聲源交叉淡化、循環點與節拍同步 |
+| E3 | LRU 快取淘汰 | 快取達到預算時，優先放掉最久未使用且可回收的素材，例如大量對話／語音播放後控制素材保留量 | 在 AudioClipStore 記錄最近使用順序並加入可配置預算；以既有 lease、播放使用數及預載群組判斷可淘汰項目。預算採項目數或記憶體估算，依實測決定 |
+| E4 | 重要聲音保護 | 同時播放過多聲音時，優先保留任務語音、BGM 等重要內容，避免被一般音效替換 | 在現有並發政策加入重要性、保護標記或分類保留額度；定義可替換對象與沒有可替換對象時的拒絕規則，並搭配 Unity 的 AudioSource.priority 與實際聲道預算 |
+
+**整合原則：** 沿用現有 AudioHandle、播放引擎、聲源池及素材持有機制，依功能擴充播放設定與必要的狀態流程；保留既有 API 的 2D 預設行為。E2 對播放流程影響較大，優先評估新增音樂控制層。是否另拆套件／assembly，待功能範圍明確後決定。現行普通 BGM 切換維持先淡出再淡入。
+
+**各項最低驗收方向：**
+
+- **E1：** 位置、左右方向與距離衰減符合設定；跟隨物件移動／銷毀及場景卸載後行為明確；聲源由 3D 回收再用於 2D 時，不殘留位置、跟隨目標或空間設定。基礎 API 參考 [Unity spatialBlend](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AudioSource-spatialBlend.html)。
+- **E2：** 已排程尚未起播不被誤判為完成；取消或服務關閉後不遲到發聲；暫停／恢復、素材逾期及段落切換依明確政策執行，素材在排程／播放期間保持有效。以目標 Player 量測起播與串接，區分音訊時鐘排程精度及裝置輸出延遲。基礎 API 參考 [Unity PlayScheduled](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AudioSource.PlayScheduled.html)。
+- **E3：** 淘汰順序符合最近使用紀錄；載入中、播放中及仍被預載群組保留的素材不得因快取預算提前釋放。所有候選均受保護時，回報無法達成預算的狀態；驗證被淘汰素材可重新載入，並量測換場與大量語音的保留量及重載成本。解除服務持有不保證 native 記憶體立即下降，須依 [Addressables 記憶體管理](https://docs.unity3d.com/Packages/com.unity.addressables@2.11/manual/memory-assets.html) 與目標平台實測判讀。
+- **E4：** 全域／單音效上限與 Loading 預約仍一致；受保護播放不被一般音效的搶占政策終止；沒有可淘汰對象時依政策拒絕新請求，且回呼重入不突破上限。分別驗證服務選擇停止誰，以及 Unity 實際混音聲道的取捨；只設定 [AudioSource.priority](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AudioSource-priority.html) 不等於完成服務層的保護政策。
+
+**評估順序：** 一般 2D 專案可優先評估 E4；有場景定位需求時評估 E1，大量素材或實測記憶體壓力出現時評估 E3，需要節拍／段落串接時評估 E2。此順序為需求評估建議，不表示四項均須實作，也不預先承諾效能改善幅度。
+
+其他後續候選仍保留：語音播放時降低背景音量、對話佇列、群組隨機／依序播放，以及完整 ScriptableObject 音效資產、音效庫掃描、波形與循環點編輯工具；同樣不列為前三階段的必要條件。
 
 ### 10.2 執行到相關階段時確認
 
@@ -512,6 +799,14 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 第二階段 C1～C7 實作與本機 Editor 驗收（92／92 PlayMode、2 項 Play Mode 重入情境及原場景操作／聲源池基準通過，見 5.4）。
 - [x] 第二階段補強 R7～R9、效能前後量測與 PrepareClip（118 項行為測試、量測及 Reload 驗收通過，見 5.5）。
 - [ ] 第三階段實作與驗收。
+- [x] 登錄 E1～E4 可選擴充計畫、整合原則與最低驗收方向（僅完成規劃，功能尚未實作，見 10.1）。
+- [x] 再次搜尋開源／官方資料並補做目錄、音量更新及批次停止量測（正式 Runtime 未修改，近期改善候選見 5.6）。
+- [x] 音量更新去重與 Catalog 索引／驗證實作、前後量測及完整本機回歸（134 項 PlayMode、14 項 EditMode／Reload，見 5.7）。
+- [x] 優化後再搜尋開源與官方資料，補量冷池／過載／重複狀態成本並重現 R10（研究紀錄見 5.8）。
+- [x] 修正 R10：並發拒絕保留既有播放／待載入／轉場，補動態上限、多個替換及回呼回歸（149 項 PlayMode、14 項 EditMode／Reload，見 5.9）。
+- [x] 完成暫停／靜音去重、可選聲源預熱與拒絕路徑優化，保留逐步前後量測與原子拒絕契約（170 項 PlayMode、14 項 EditMode／Reload，見 5.10）。
+- [x] 再次核對五個固定提交的開源專案與官方資料，新增九項邊界／對照測試並確認 R11～R15（179 項 PlayMode 中 172 通過／7 失敗，見 5.11）。
+- [ ] 修正 R11～R15，驗證新邊界與既有契約，再依目標場景決定是否實作單音效索引及閒置縮池。
 
 ## 12. 原專案與 Unity 技術依據
 
@@ -537,3 +832,10 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.5 | 2026-09-29 | 完成第二階段 C1～C7：handle、目錄、素材 lease、聲源池、設定／暫停與生命週期；92 項 PlayMode 與 2 項重入情境通過，記錄 Editor 操作、29 聲源重用及 Profiler 基準，明列相容性變更與第三階段界線 |
 | 1.6 | 2026-09-29 | 合併第二階段後續研究、三項已重現的回呼缺陷與新增開源參考；106 項 PlayMode 與 Reload 生命週期驗收通過，效能量測待執行 |
 | 1.7 | 2026-09-29 | 完成使用中聲源更新、快取及無限制播放路徑優化；新增 PrepareClip 與背景載入／取消驗證；回填同環境 CPU／配置事件／音訊資料 A/B、118 項行為測試與第三階段界線 |
+| 1.8 | 2026-09-29 | 登錄 3D 空間音效、DSP 排程、LRU 快取淘汰與重要聲音保護四項可選擴充；補上用途、實作範圍、整合原則與最低驗收方向，明列尚未實作且不作為目前套件化的必要條件。僅更新文件 |
+| 1.9 | 2026-09-29 | 重新搜尋並固定 AudioConductor 2.5.1、LucidAudio 與 Unity3D-SoundManager 的參考提交；補量 Catalog 索引原型、重複音量更新與批次停止，記錄優先順序、GC 指標校驗限制及 Player 驗證界線。正式 Runtime 未修改 |
+| 1.10 | 2026-09-30 | 完成音量去重、PlayerPrefs key 配置移除、Catalog 索引與 Inspector 資料驗證；保留解析／設定／刷新契約，補當日前後量測及索引管理記憶體代價，134 項 PlayMode、14 項 EditMode／Reload 通過；第三階段尚未開始 |
+| 1.11 | 2026-09-30 | 優化後再次核對 4 個固定提交的開源專案與官方資料；補量冷／暖池、過載拒絕與相同 Pause／Mute，重現 R10 多重並發限制的部分停止問題並列為優先待修。正式 C# 未修改 |
+| 1.12 | 2026-09-30 | 修正 R10：完整判斷並發限制後才替換，拒絕保留既有聲音、待載入與 BGM 轉場／淡出；保留動態上限、替換順序與回呼語意。新增 14 項回歸，修正前 6 項失敗；修正後 149 項 PlayMode、14 項 EditMode／Reload 通過 |
+| 1.13 | 2026-09-30 | 完成暫停／靜音同值去重、PrewarmSources 可選容量預熱、接納前判斷與拒絕配置減少；補逐步量測、20 項行為回歸與 1 項量測，170 項 PlayMode、14 項 EditMode／Reload 通過；保留 R10、handle、快照及生命週期契約 |
+| 1.14 | 2026-09-30 | 重新核對五個開源專案與 Unity／Addressables 官方資料，重現 Provider 釋放重入／例外、Listener 暫停誤判、音訊重設狀態與定位快取五類缺陷 R11～R15；新增九項測試，完整 179 項中 172 通過／7 失敗。列出修正順序及單音效索引／縮池候選；正式 C# 未修改，缺陷尚未修復 |

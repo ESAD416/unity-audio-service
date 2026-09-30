@@ -1,0 +1,6 @@
+{
+  "name": "Controller.Audio.Editor",
+  "references": ["Controller.Audio"],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true
+}

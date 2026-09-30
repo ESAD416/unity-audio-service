@@ -63,7 +63,12 @@ namespace Controller.Audio
         }
         public void SetClipProvider(IAudioClipProvider provider)
         { if (ReferenceEquals(clipProvider, provider)) return; DetachProviderNotifications(); clipProvider = provider; engine?.SetProvider(provider); AttachProviderNotifications(); }
-        public void RefreshClipProvider() { if (Ready) engine?.SetProvider(clipProvider, true); }
+        public void RefreshClipProvider()
+        {
+            // Publish new lookup data before cancellation callbacks can request playback.
+            if (catalog != null) catalog.RebuildIndex();
+            if (Ready) engine?.SetProvider(clipProvider, true);
+        }
         private void AttachProviderNotifications()
         { if (Ready && !providerSubscribed && clipProvider is IAudioClipProviderChanges changes) { changes.Changed += RefreshClipProvider; providerSubscribed = true; } }
         private void DetachProviderNotifications()
@@ -77,6 +82,7 @@ namespace Controller.Audio
             Instance = this;
             if (Ready) return;
             if (transform.parent == null) DontDestroyOnLoad(gameObject);
+            if (catalog != null) catalog.RebuildIndex();
             if (!AudioValues.Alive(clipProvider)) clipProvider = AudioValues.Alive(globalProvider) ? globalProvider : null;
             LoadAudioMixer(); InitializeMixer(); EnsureAudioSources();
             Ready = true;
@@ -226,7 +232,7 @@ namespace Controller.Audio
         public AudioHandle Play(AudioCategory category, AudioId id, PlayOptions options = null) => Request(category, id, null, options, -1);
         public AudioHandle Play(AudioCategory category, AudioClip clip, PlayOptions options = null) => Request(category, default, clip, options, -1);
         public AudioHandle PlayBgmHandle(AudioId id, PlayOptions options = null)
-        { var o = (options ?? new PlayOptions()).Snapshot(); o.Loop = true; return Request(AudioCategory.Bgm, id, null, o, 0); }
+            => Request(AudioCategory.Bgm, id, null, options, 0);
         public AudioHandle PlaySfxHandle(AudioId id, PlayOptions options = null) => Play(AudioCategory.Sfx, id, options);
         public AudioHandle PlayVoiceHandle(AudioId id, PlayOptions options = null) => Play(AudioCategory.Voice, id, options);
 
@@ -260,6 +266,10 @@ namespace Controller.Audio
         public void SetGamePaused(bool paused) => engine?.SetPaused(paused);
         public void SetBackgroundPaused(bool paused) => engine?.SetPaused(paused, true);
         public void SetMuted(AudioChannel channel, bool muted) { if ((int)channel >= 0 && (int)channel < 4) engine?.SetMuted(channel, muted); }
+        /// <summary>On the main thread, grow total dynamic source capacity (active + idle) to targetCount.
+        /// Excludes the five legacy sources. Returns sources created; nonpositive targets or an unready service return zero.
+        /// Call during loading: this creates objects synchronously, without loading clips or changing voice limits.</summary>
+        public int PrewarmSources(int targetCount) => Ready && engine != null ? engine.PrewarmSources(targetCount) : 0;
         public void Preload(AudioCategory category, AudioId id, string group, Action<bool> completed = null)
         { if (!Ready || string.IsNullOrWhiteSpace(group) || string.IsNullOrWhiteSpace(id.Value)) { AudioCallbacks.Invoke(completed, false); return; } engine.Preload(Resolve(category, id), group, completed); }
         /// <summary>Retain a clip in a group and complete when Unity reports its audio data loaded.
@@ -311,16 +321,31 @@ namespace Controller.Audio
         private void SetVolume(AudioChannel channel, float value)
         {
             int index = (int)channel; if (index < 0 || index > 3) return;
-            value = AudioValues.Unit(value); bool changed = volumes[index] != value; volumes[index] = value;
-            if (mixerApplied) ApplyMixerSettings();
-            engine?.RefreshGains();
+            value = AudioValues.Unit(value); bool changed = volumes[index] != value;
+            if (changed)
+            {
+                float bgmGain = SourceSettingsGain(AudioCategory.Bgm);
+                float sfxGain = SourceSettingsGain(AudioCategory.Sfx);
+                float voiceGain = SourceSettingsGain(AudioCategory.Voice);
+                volumes[index] = value;
+                if (mixerApplied) ApplyMixerParameter(index);
+                // A working mixer applies player volume itself. Refresh sources only
+                // when their fallback gain changes, including a failed mixer write.
+                if (bgmGain != SourceSettingsGain(AudioCategory.Bgm) ||
+                    sfxGain != SourceSettingsGain(AudioCategory.Sfx) ||
+                    voiceGain != SourceSettingsGain(AudioCategory.Voice)) engine?.RefreshGains();
+            }
+            // An unchanged effective volume may still need to persist a temporary
+            // ApplyVolume(..., persist: false) value or synchronize a newly bound handler.
             if (!applyingSettings && AudioValues.Alive(settingsHandler)) settingsHandler.UpdateVolume(channel, value);
             if (changed) VolumeChanged?.Invoke(channel, value);
         }
+        private void ApplyMixerParameter(int index)
+        { mixerParameters[index] = mixer != null && mixer.SetFloat(Parameters[index], AudioValues.Decibels(volumes[index])); }
         private void ApplyMixerSettings()
         {
             mixerApplied = true;
-            for (int i = 0; i < 4; i++) mixerParameters[i] = mixer != null && mixer.SetFloat(Parameters[i], AudioValues.Decibels(volumes[i]));
+            for (int i = 0; i < 4; i++) ApplyMixerParameter(i);
             engine?.RefreshGains();
         }
         public void SetMixer(AudioMixer value)

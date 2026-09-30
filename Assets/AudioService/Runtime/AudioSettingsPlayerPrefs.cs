@@ -32,14 +32,13 @@ namespace Controller.Audio
         public float SfxVolume { get { EnsureLoaded(); return values[2]; } }
         public float VoiceVolume { get { EnsureLoaded(); return values[3]; } }
         public int SaveCount { get; private set; }
-        private string[] Keys => new[] { masterKey, bgmKey, sfxKey, voiceKey };
-        private float[] Defaults => new[] { defaultMaster, defaultBgm, defaultSfx, defaultVoice };
+        private string Key(int index) => index == 0 ? masterKey : index == 1 ? bgmKey : index == 2 ? sfxKey : voiceKey;
+        private float Default(int index) => AudioValues.Unit(index == 0 ? defaultMaster : index == 1 ? defaultBgm : index == 2 ? defaultSfx : defaultVoice, 1);
         private void Awake() => EnsureLoaded();
         private void EnsureLoaded() { if (!loaded) Reload(); }
         public void Reload()
         {
-            var keys = Keys; var defaults = Defaults;
-            for (int i = 0; i < 4; i++) values[i] = AudioValues.Unit(PlayerPrefs.GetFloat(keys[i], AudioValues.Unit(defaults[i], 1)), AudioValues.Unit(defaults[i], 1));
+            for (int i = 0; i < 4; i++) values[i] = AudioValues.Unit(PlayerPrefs.GetFloat(Key(i), Default(i)), Default(i));
             loaded = true;
         }
         public void UpdateVolume(AudioChannel channel, float normalizedVolume)
@@ -47,7 +46,7 @@ namespace Controller.Audio
             EnsureLoaded(); int index = (int)channel; if (index < 0 || index > 3) return;
             var value = AudioValues.Unit(normalizedVolume);
             if (values[index] == value) return;
-            values[index] = value; PlayerPrefs.SetFloat(Keys[index], value);
+            values[index] = value; PlayerPrefs.SetFloat(Key(index), value);
             MarkDirty(); VolumeChanged?.Invoke(channel, value);
         }
         private void MarkDirty() { dirty = true; flushAt = Time.realtimeSinceStartup + AudioValues.Seconds(saveDelaySeconds); }
@@ -57,7 +56,7 @@ namespace Controller.Audio
         private void OnApplicationPause(bool paused) { if (paused) Flush(); }
         public void ResetSettings()
         {
-            foreach (var key in Keys) PlayerPrefs.DeleteKey(key);
+            for (int i = 0; i < 4; i++) PlayerPrefs.DeleteKey(Key(i));
             loaded = false; EnsureLoaded(); MarkDirty(); BroadcastStoredVolumes();
         }
         public void BroadcastStoredVolumes()

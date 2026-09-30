@@ -71,6 +71,11 @@ namespace Controller.Audio
             State = AudioPlaybackState.Finished; Result = result; FailureReason = reason; Owner = null;
             var subscribers = completed; completed = null;
             if (subscribers == null) return;
+            DispatchCompleted(owner, subscribers);
+        }
+        private void DispatchCompleted(AudioPlaybackEngine owner, Action<AudioHandle> subscribers)
+        {
+            // Keep the notification closure out of the common no-subscriber path.
             void Notify() { foreach (Action<AudioHandle> callback in subscribers.GetInvocationList()) Invoke(callback); }
             if (owner != null) owner.NotifyCompleted(Notify); else Notify();
         }

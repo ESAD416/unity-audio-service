@@ -8,6 +8,7 @@
 - Runtime assembly：`Controller.Audio`，目前仍依賴 `Unity.Addressables`／`Unity.ResourceManager`。尚未支援不安裝 Addressables 的獨立核心套件。
 - 已驗證本機 Editor／PlayMode、原始 Prefab／場景、Addressables Editor 資產模式及無 Domain Reload 的 Play Mode 重入。
 - Addressables content build、Player、其他 Unity 版本與平台尚未驗證。不得將 Editor 通過視為已完成部署驗證。
+- 2026-09-30 最新邊界審查：既有 170 項 PlayMode 仍通過，新增 9 項中 7 項失敗，確認 Provider 釋放重入／例外、外部 AudioListener 暫停、音訊配置重設與 Addressables 對應刷新五類待修問題。觸發條件、限制及證據見[改善計劃第 5.11 節](unity-audio-service-improvement-plan.md)；本輪尚未修正正式程式。
 
 ## 快速導入
 
@@ -59,9 +60,13 @@ voice.Stop(0.2f);
 
 ## 音效目錄與來源政策
 
-`AudioId` 是區分類別、大小寫敏感的邏輯識別字。建議使用 `ui.confirm`、`music.menu` 等名稱；未設定目錄時，既有字串 key 照常使用。
+`AudioId` 是區分類別、大小寫敏感的邏輯識別字。建議使用 `ui.confirm`、`music.menu` 等名稱；未設定目錄或查無對應項目時，既有字串 key 照常使用。
 
 建立 `Assets > Create > Audio Service > Catalog` 資產，填入 Entries，並指定 Controller 的 Catalog。每筆資料包含 Id、Category、ResourcesKey、AddressablesKey、Aliases 與 MaxInstances。同一類別的別名應唯一，不同素材不要共用同一 ID。
+
+Catalog 使用分類＋ID／別名索引。Inspector 會顯示重複 key、空 ID／別名、前後空白、無效分類、空來源 key 及負數 MaxInstances；也可按 `Validate Catalog` 或呼叫 `GetValidationIssues()` 取得檢查結果。驗證不修改資料、不載入素材；來源 key 有值不代表 Provider 或建置後的 catalog 一定能找到素材，仍須驗證實際載入。來源 key 為 null 時沿用 ID，明確填空字串則停用該內建來源的 key。
+
+為維持既有行為，同分類 ID／別名衝突仍由 Entries 中先出現者優先，不因改用索引而變更播放對象；不同分類可使用相同 key。請依 Inspector 訊息修正衝突資料。
 
 ```csharp
 var catalog = UnityEngine.ScriptableObject.CreateInstance<AudioCatalog>();
@@ -82,7 +87,9 @@ Fallback 有兩個明確政策：
 - `PreferAvailable`（預設）：先使用主來源已駐留的素材；其次使用備援已駐留素材或同步 Resources；仍無素材才載入主來源，失敗後再嘗試備援。
 - `PrimaryThenBackup`：等待主來源結果，失敗才使用備援，不因備援已快取而提前取代主來源。
 
-改變 Fallback 的 Policy／Configure 會通知服務，取消舊待播放請求並建立新快取世代；已播放的舊素材保留到播放結束。更換 Catalog 也會刷新；直接修改同一 Catalog 的 Entries 後，呼叫 `RefreshClipProvider()` 使舊解析快取失效。
+改變 Fallback 的 Policy／Configure 會通知服務，取消舊待播放請求並建立新快取世代；已播放的舊素材保留到播放結束。更換 Catalog 也會刷新；直接修改同一 Catalog 的 Entries、ID 或 Aliases 後，呼叫 `RefreshClipProvider()` 重建索引並使舊素材快取失效。新索引會先建立，再發出取消通知，回呼內的新播放會使用更新後的映射。
+
+Controller 初始化／重新啟用也會重建索引。直接使用 `AudioCatalog.TryResolve()` 時，首次查詢、Entries 陣列替換或 Unity 編輯／反序列化後會自動重建；程式直接修改既有 entry／alias 內容後須呼叫 `RebuildIndex()`。服務使用中的 Catalog 應使用上述 `RefreshClipProvider()`，才能一起處理待載入請求與快取。索引需要額外管理記憶體，重建有配置成本，適合在初始化或資料更新時執行。
 
 `TryGetCachedClip` 是純快取查詢，不發起載入。Resources 的舊 `TryGetClip` 仍可能同步載入。`AllowAsyncLoad=false` 不等待進行中的載入：Resources 可同步取得，Addressables 只使用已駐留素材，且取得獨立持有權。
 
@@ -124,6 +131,8 @@ audio.ReleaseUnusedClips();
 
 `MaxVoices=0` 表示不設服務上限，避免任意替專案決定預算。可設定服務總上限，及 PlayOptions／Catalog 的單音效上限。計數包含 Loading 中的預約；單音效的限制以分類＋解析後 ID 計算。
 
+並發限制會先完整判斷，再執行替換。因限制而 `Rejected` 的請求不停止舊聲音、不取消既有 Loading，也不重設 BGM／Voice 的轉場或淡出。單音效 `StealOldest` 釋出的名額可同時滿足全域限制；若仍無法符合全域 `RejectNew`，整個新請求遭拒絕。播放中調低上限本身不會停止聲音，下次允許替換的請求才依最舊順序移除所需數量，可能一次替換多個。R10 修正與驗收見改善計畫 §5.9。
+
 ```csharp
 audio.MaxVoices = 24; // 範例值，請依自己的場景量測。
 audio.ConcurrencyPolicy = AudioConcurrencyPolicy.StealOldest;
@@ -137,10 +146,23 @@ var handle = audio.PlaySfxHandle("ui.result", new PlayOptions
 
 超過上限可回傳 Rejected 或停止最舊實例。聲源歸還時清除 clip、pitch、loop、Mixer、暫停標記、播放包絡與轉換。每幀僅巡覽使用中的聲源；增益改變時才更新 volume，分類／Master 淡出仍同步更新舊 API 聲源。池降低重複建立的成本；同時混音的數量仍由並發政策與 Unity AudioSettings 分別決定。
 
+可在主執行緒的載入流程明確預熱聲源：
+
+```csharp
+int created = audio.PrewarmSources(32);
+// 動態聲源總容量（使用中＋閒置）至少達到 32；回傳這次新增的數量。
+// 五個舊 API 相容聲源另外計算；重複呼叫只補不足部分。
+```
+
+未呼叫時不額外預熱。`PrewarmSources` 同步建立閒置聲源與預留播放清單容量，不播放或載入 clip、不改 `MaxVoices`；非正數或服務尚未 Ready 時回傳 0，不自動啟動服務。較小目標不縮池，播放需求超過預熱容量時仍按需擴充。預熱會提前保留物件與記憶體，動態聲源在 Shutdown 清理；若重新 Initialize，需要時再預熱。素材準備使用 `PrepareClip`，聲源預熱本身不保證首次播放延遲。
+
 - `SetGamePaused(true)` 暫停一般播放；`IgnoreGamePause=true` 的 UI 聲音略過此原因。
 - 個別 `handle.Pause()` 的原因獨立保存，解除遊戲暫停不會擅自恢復個別暫停。
 - `SetBackgroundPaused`／預設啟用的 `pauseOnBackground` 適用全部播放，包括 UI。
 - `SetMuted(channel, true)` 只抑制輸出，不停播、不改 PlayerPrefs；`Time.timeScale=0` 本身不等於音訊暫停，遊戲需明確呼叫服務。
+- 重複設定相同的遊戲／背景暫停或同通道靜音會直接返回；新播放、載入完成與重用聲源仍套用目前狀態。
+
+並發檢查通過後才建立設定快照、播放資料及所需載入回呼。一般入口僅有全域限制時直接使用現有播放數量；單音效限制與替換分支仍完整檢查。拒絕仍回傳獨立 handle，保留 ID、原因與晚訂閱通知。效能測點與限制見改善計畫 §5.10。
 
 ## 音量與設定
 
@@ -148,6 +170,7 @@ var handle = audio.PlaySfxHandle("ui.result", new PlayOptions
 
 - Mixer 群組為 BGM／Sound／Voice，exposed parameter 為 `masterVolume`／`bgmVolume`／`soundVolume`／`voiceVolume`。`ValidateMixer()` 與 `LastMixerIssue` 提供基本診斷；缺失的路由／參數使用來源增益備援。
 - `SetMasterVolume`／`SetBgmVolume`／`SetSfxVolume`／`SetVoiceVolume` 經已綁定 handler 同步儲存與事件。Bootstrap 的 `ApplyVolume(..., persist:false)` 可暫時調整而不寫回設定。
+- 同值設定省略音訊套用，但仍可把先前的暫時音量存入 handler；`VolumeChanged` 僅在有效數值改變時通知。Mixer 更新只寫入改變的通道；有聲源備援增益變化時才更新聲源。初始化及 `SetMixer(...)` 仍會完整套用四個通道。
 - `FadeBus` 涵蓋該分類所有新舊實例；`FadeChannel(Sfx/Voice, ..., useLoopSource)` 保留舊 API 的循環／非循環分支，只影響經舊入口建立的聲音。
 - `FadeChannel(Master)`／`FadeBus(Master)` 涵蓋全部分類。停止淡出只作用於呼叫當時的播放，後續新播放不受舊停止流程控制。
 - 非停止淡出的分類／分支增益持續有效。停止或重播只重設播放包絡，不覆寫玩家設定，也不清除刻意設定的分類衰減。
@@ -176,4 +199,4 @@ Bootstrap 以自身作為全域 Provider 註冊擁有者；舊擁有者退訂不
 
 `Diagnostics` 提供 Playing、Paused、Loading、PooledSources、CreatedSources、CachedClips、ClipUsers、PendingLoads、PreparingClips 與 LastFailure。`PreparingClips` 包含等待資產或音訊資料的準備需求，`PendingLoads` 僅計服務資產載入。快取統計指目前 Provider 世代的服務快取；切換後仍在播放的舊 lease 會保持有效，但不列入新世代快取統計。`verboseLogging` 可開關額外日誌。
 
-原第二階段驗收見 [改善計畫 §5.4](unity-audio-service-improvement-plan.md#54-第二階段實作與驗收紀錄)，後續修正與效能前後量測見同文件 §5.5，相容性變更見 [CHANGELOG](CHANGELOG.md)。本機測試位於受忽略的 `Assets/AudioService/Tests/`；重跑工具在 `Tools/AudioService/`，XML／Profiler 操作紀錄在 `work/stage-two/` 與 `work/stage-two-hardening/`，均不隨 Git 發布。
+原第二階段驗收見 [改善計畫 §5.4](unity-audio-service-improvement-plan.md#54-第二階段實作與驗收紀錄)，後續修正與效能前後量測見同文件 §5.5；音量去重、Catalog 索引／驗證與 2026-09-30 驗收見 §5.7，相容性變更見 [CHANGELOG](CHANGELOG.md)。本機測試位於受忽略的 `Assets/AudioService/Tests/`；重跑工具在 `Tools/AudioService/`，XML／Profiler 操作紀錄在 `work/stage-two/`、`work/stage-two-hardening/` 與 `work/core-optimization-20260930/`，均不隨 Git 發布。

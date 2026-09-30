@@ -84,17 +84,35 @@ namespace Controller.Audio
             previousStore?.Dispose();
         }
         private Playback Find(AudioHandle handle) => active.Find(p => ReferenceEquals(p.Handle, handle));
+        private Emitter CreateEmitter()
+        {
+            var go = new GameObject("AudioEmitter"); go.transform.SetParent(host.transform, false);
+            var source = go.AddComponent<AudioSource>(); source.playOnAwake = false; source.spatialBlend = 0; source.Stop();
+            var emitter = new Emitter { Source = source }; emitters.Add(emitter);
+            return emitter;
+        }
+        public int PrewarmSources(int targetCount)
+        {
+            if (disposed || !host.Ready || targetCount <= 0) return 0;
+            int missing = targetCount - (emitters.Count - reserved.Length);
+            if (missing <= 0) return 0;
+            for (int i = 0; i < missing; i++)
+            {
+                var emitter = CreateEmitter(); emitter.InPool = true; pool.Push(emitter);
+            }
+            // Reserve the bookkeeping arrays as well as native sources. Idle
+            // emitters stay out of updating and acquire current gains on Start.
+            if (active.Capacity < emitters.Count) active.Capacity = emitters.Count;
+            if (updating.Capacity < emitters.Count) updating.Capacity = emitters.Count;
+            return missing;
+        }
         private Emitter Rent(int bank)
         {
             if (bank >= 0 && (bank != 1 || (reserved[bank].Current == null && reserved[bank].Pending == null)))
             { Activate(reserved[bank]); return reserved[bank]; }
             Emitter emitter;
             if (pool.Count > 0) { emitter = pool.Pop(); emitter.InPool = false; }
-            else
-            {
-                var go = new GameObject("AudioEmitter"); go.transform.SetParent(host.transform, false);
-                emitter = new Emitter { Source = go.AddComponent<AudioSource>() }; emitters.Add(emitter);
-            }
+            else emitter = CreateEmitter();
             emitter.Bank = bank; Activate(emitter);
             return emitter;
         }
@@ -125,19 +143,31 @@ namespace Controller.Audio
         public AudioHandle Play(AudioCategory category, AudioClipAddress address, AudioClip direct, PlayOptions supplied, int bank = -1)
         {
             using var mutation = callbacks.Begin();
-            var options = (supplied ?? new PlayOptions()).Snapshot();
             var handle = new AudioHandle { Id = ++nextId, AudioId = new AudioId(address?.Id ?? (direct != null ? "external:" + direct.GetEntityId() : null)), Category = category, Owner = this };
-            var playback = new Playback { Handle = handle, Options = options, Bank = bank };
             if (disposed || !host.Ready || (int)category < 0 || (int)category > 2 || (direct == null && string.IsNullOrWhiteSpace(address?.Id)))
             { Reject(handle, AudioCompletion.Failed, "Service unavailable or empty audio id/clip"); return handle; }
-            if (options.MaxInstances == 0 && address != null) options.MaxInstances = Mathf.Max(0, address.MaxInstances);
+            int maxInstances = Mathf.Max(0, supplied?.MaxInstances ?? 0);
+            if (maxInstances == 0 && address != null) maxInstances = Mathf.Max(0, address.MaxInstances);
+            if (!TryPlanAdmission(handle, bank, maxInstances, supplied?.ConcurrencyPolicy ?? AudioConcurrencyPolicy.RejectNew, out var victims)) return handle;
+            StartAccepted(handle, address, direct, supplied, bank, maxInstances, victims);
+            return handle;
+        }
+        private void StartAccepted(AudioHandle handle, AudioClipAddress address, AudioClip direct, PlayOptions supplied, int bank, int maxInstances, Playback[] victims)
+        {
+            // Snapshot before eviction can release a provider lease or invoke external code.
+            var options = supplied != null ? supplied.Snapshot() : new PlayOptions();
+            options.MaxInstances = maxInstances;
+            if (bank == 0) options.Loop = true;
+            var playback = new Playback { Handle = handle, Options = options, Bank = bank };
+            if (victims != null)
+                foreach (var victim in victims)
+                    Finish(victim, victim.Handle.State == AudioPlaybackState.Loading ? AudioCompletion.Cancelled : AudioCompletion.Stopped);
             if (bank >= 0 && bank != 1)
             {
                 var slot = reserved[bank];
                 if (slot.Pending != null) Finish(slot.Pending, AudioCompletion.Cancelled);
                 slot.Transition = null; slot.Envelope = 1; bankTweens[bank] = null;
             }
-            if (!MakeRoom(playback)) return handle;
             active.Add(playback);
             if (bank != 1)
             {
@@ -145,38 +175,57 @@ namespace Controller.Audio
             }
             // All one-shots now have their own source, including the legacy convenience API.
             if (direct != null) Loaded(playback, new AudioClipLease(direct));
-            else
-            {
-                var cancel = store.Request(address, options.AllowAsyncLoad, lease => Loaded(playback, lease));
-                if (!playback.Handle.IsFinished && playback.Lease == null) playback.CancelLoad = cancel;
-            }
-            return handle;
+            else RequestClip(playback, address);
         }
-        private bool MakeRoom(Playback incoming)
+        private void RequestClip(Playback playback, AudioClipAddress address)
         {
-            if (MaxVoices <= 0 && incoming.Options.MaxInstances <= 0) return true;
-            while (true)
+            // Isolate the load closure from direct playback and rejected requests.
+            var cancel = store.Request(address, playback.Options.AllowAsyncLoad, lease => Loaded(playback, lease));
+            if (!playback.Handle.IsFinished && playback.Lease == null) playback.CancelLoad = cancel;
+        }
+        private bool TryPlanAdmission(AudioHandle incoming, int bank, int maxInstances, AudioConcurrencyPolicy policy, out Playback[] victims)
+        {
+            victims = null;
+            if (MaxVoices <= 0 && maxInstances <= 0) return true;
+            bool replacesBank = bank >= 0 && bank != 1;
+            int count = active.Count, same = 0;
+            // Ordinary global-only requests already have an exact count, including
+            // Loading and Paused. Replacement banks and per-audio limits still scan.
+            if (replacesBank || maxInstances > 0)
             {
-                int count = 0, same = 0;
-                Playback oldest = null, oldestSame = null;
+                count = 0;
                 foreach (var p in active)
                 {
-                    if (incoming.Bank >= 0 && incoming.Bank != 1 && p.Bank == incoming.Bank) continue;
-                    count++; if (oldest == null) oldest = p;
-                    if (p.Handle.Category == incoming.Handle.Category && p.Handle.AudioId.Equals(incoming.Handle.AudioId))
-                    { same++; if (oldestSame == null) oldestSame = p; }
+                    if (replacesBank && p.Bank == bank) continue;
+                    count++;
+                    if (maxInstances > 0 && SameAudio(p, incoming)) same++;
                 }
-                bool soundFull = incoming.Options.MaxInstances > 0 && same >= incoming.Options.MaxInstances;
-                bool globalFull = MaxVoices > 0 && count >= MaxVoices;
-                if (!soundFull && !globalFull) return true;
-                var policy = soundFull ? incoming.Options.ConcurrencyPolicy : ConcurrencyPolicy;
-                if (policy == AudioConcurrencyPolicy.RejectNew)
-                { Reject(incoming.Handle, AudioCompletion.Rejected, soundFull ? "Per-audio concurrency limit" : "Global concurrency limit"); return false; }
-                var victim = soundFull ? oldestSame : oldest;
-                if (victim == null) return false;
-                Finish(victim, victim.Handle.State == AudioPlaybackState.Loading ? AudioCompletion.Cancelled : AudioCompletion.Stopped);
             }
+            // Decide every limit before stopping anything. Per-audio evictions also
+            // free global capacity; lowered limits may require more than one victim.
+            int soundVictims = maxInstances > 0 ? Mathf.Max(0, same - maxInstances + 1) : 0;
+            if (soundVictims > 0 && policy == AudioConcurrencyPolicy.RejectNew)
+            { Reject(incoming, AudioCompletion.Rejected, "Per-audio concurrency limit"); return false; }
+            int globalVictims = MaxVoices > 0 ? Mathf.Max(0, count - soundVictims - MaxVoices + 1) : 0;
+            if (globalVictims > 0 && ConcurrencyPolicy == AudioConcurrencyPolicy.RejectNew)
+            { Reject(incoming, AudioCompletion.Rejected, "Global concurrency limit"); return false; }
+            int victimCount = soundVictims + globalVictims;
+            if (victimCount == 0) return true;
+
+            // Preserve per-audio-first, then global-oldest order. Only accepted
+            // requests that actually evict allocate a candidate snapshot.
+            victims = new Playback[victimCount];
+            int soundIndex = 0, globalIndex = soundVictims;
+            foreach (var p in active)
+            {
+                if (replacesBank && p.Bank == bank) continue;
+                if (soundIndex < soundVictims && SameAudio(p, incoming)) victims[soundIndex++] = p;
+                else if (globalIndex < victimCount) victims[globalIndex++] = p;
+                if (soundIndex == soundVictims && globalIndex == victimCount) break;
+            }
+            return true;
         }
+        private static bool SameAudio(Playback playback, AudioHandle handle) => playback.Handle.Category == handle.Category && playback.Handle.AudioId.Equals(handle.AudioId);
 
         private void Reject(AudioHandle handle, AudioCompletion result, string reason)
         { LastFailure = reason; handle.Finish(result, reason); host.ReportFailure(reason); }
@@ -256,8 +305,16 @@ namespace Controller.Audio
             else if (!Paused(p) && p.Handle.State == AudioPlaybackState.Paused) { p.Emitter.Source.UnPause(); p.Handle.State = AudioPlaybackState.Playing; }
         }
         public void SetPaused(bool paused, bool background = false)
-        { if (background) backgroundPaused = paused; else gamePaused = paused; foreach (var p in active.ToArray()) ApplyPause(p); }
-        public void SetMuted(AudioChannel channel, bool value) { muted[(int)channel] = value; RefreshGains(); }
+        {
+            if ((background ? backgroundPaused : gamePaused) == paused) return;
+            if (background) backgroundPaused = paused; else gamePaused = paused;
+            foreach (var p in active.ToArray()) ApplyPause(p);
+        }
+        public void SetMuted(AudioChannel channel, bool value)
+        {
+            if (muted[(int)channel] == value) return;
+            muted[(int)channel] = value; RefreshGains();
+        }
         public void StopCategory(AudioCategory? category, bool loopOnly, float seconds, float target = 0f)
         {
             using var mutation = callbacks.Begin();
