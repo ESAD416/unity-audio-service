@@ -240,7 +240,7 @@ namespace Controller.Audio
         private void RequestClip(Playback playback, AudioClipAddress address)
         {
             // Isolate the load closure from direct playback and rejected requests.
-            var cancel = store.Request(address, playback.Options.AllowAsyncLoad, lease => Loaded(playback, lease?.Clip, lease));
+            var cancel = store.Request(address, playback.Options.AllowAsyncLoad, lease => Loaded(playback, lease?.Clip, lease, address));
             if (!playback.Handle.IsFinished && playback.Clip == null) playback.CancelLoad = cancel;
         }
         private bool TryPlanAdmission(AudioHandle incoming, int bank, int maxInstances, AudioConcurrencyPolicy policy, out Playback[] victims)
@@ -289,14 +289,24 @@ namespace Controller.Audio
         private static bool SameAudio(Playback playback, AudioHandle handle) => playback.Handle.Category == handle.Category && playback.Handle.AudioId.Equals(handle.AudioId);
 
         private void Reject(AudioHandle handle, AudioCompletion result, string reason)
-        { LastFailure = reason; handle.Finish(result, reason); host.ReportFailure(reason); }
-        private void Loaded(Playback playback, AudioClip clip, AudioClipLease lease = null)
+        {
+            LastFailure = reason; handle.Finish(result, reason); host.ReportFailure(reason);
+            if (result == AudioCompletion.Failed) host.ReportPlaybackFailure(handle, reason);
+        }
+        private void Loaded(Playback playback, AudioClip clip, AudioClipLease lease = null, AudioClipAddress address = null)
         {
             using var mutation = callbacks.Begin();
             if (disposed || playback.Handle.IsFinished) { AudioCallbacks.Dispose(lease); return; }
             SyncListenerPause();
             playback.CancelLoad = null;
-            if (clip == null) { AudioCallbacks.Dispose(lease); Finish(playback, AudioCompletion.Failed, "Clip load failed: " + playback.Handle.AudioId); return; }
+            if (clip == null)
+            {
+                AudioCallbacks.Dispose(lease);
+                string reason = "Clip load failed: " + playback.Handle.AudioId;
+                Finish(playback, AudioCompletion.Failed, reason);
+                host.ReportPlaybackFailure(playback.Handle, reason, address, playback.Options.AllowAsyncLoad);
+                return;
+            }
             playback.Lease = lease; playback.Clip = clip;
             if (playback.Emitter == null)
             {
@@ -394,6 +404,8 @@ namespace Controller.Audio
             if (muted[(int)channel] == value) return;
             muted[(int)channel] = value; RefreshGains();
         }
+        public AudioChannelDiagnostics GetChannelDiagnostics(AudioChannel channel, float volume)
+            => new AudioChannelDiagnostics(volume, busGains[(int)channel], muted[(int)channel]);
         public void StopCategory(AudioCategory? category, bool loopOnly, float seconds, float target = 0f)
         {
             using var mutation = callbacks.Begin();
@@ -582,7 +594,7 @@ namespace Controller.Audio
             {
                 int playing = 0, paused = 0, loading = 0;
                 foreach (var p in active) { if (p.Handle.State == AudioPlaybackState.Loading) loading++; else if (p.Handle.State == AudioPlaybackState.Paused) paused++; else playing++; }
-                return new AudioDiagnostics(playing, paused, loading, pool.Count, emitters.Count, store.CachedCount, store.UserCount, store.LoadingCount, LastFailure, preparations.Count);
+                return new AudioDiagnostics(playing, paused, loading, pool.Count, emitters.Count, store.CachedCount, store.UserCount, store.LoadingCount, LastFailure, preparations.Count, gamePaused, backgroundPaused);
             }
         }
         public void Shutdown()

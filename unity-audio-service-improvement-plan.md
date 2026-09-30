@@ -2,11 +2,11 @@
 
 文件日期：2026-09-30
 
-文件版本：1.16
+文件版本：1.19
 
-狀態：BGM 載入、正常播放配置與批次控制優化完成；219 項 PlayMode、18 項 Editor／Reload、101 項 macOS Player 選定測試於無圖形／Metal 模式各通過（見 5.13）；第三階段套件化尚未開始
+狀態：完成範例控制權修正、Inspector 名稱與集中音訊檢查；258 項 PlayMode、24 項 Editor／Reload、119 項 macOS Player 選定測試於無圖形／批次 Metal 模式各通過（見 5.15）；視窗畫面與人工操作尚未驗證；第三階段套件化尚未開始
 
-本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。
+本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
 ## 1. 專案基準與審查範圍
 
@@ -87,6 +87,28 @@
 8. 依使用者指定，正式測試、輔助腳本與臨時資料均只保留於本機並由 Git 忽略；正式功能不得依賴它們，完工後可移除。詳細位置與清理方式見 9.1。
 
 前三階段的範圍以目前的 2D 音訊服務為核心。3D 定位／跟隨、節拍同步、進階音樂系統與完整音效編輯器，列為後續擴充。
+
+### 2.1 後續修改的固定易用性準則
+
+**「簡單、好用、操作直覺」是使用者指定的長期設計與驗收原則。** 後續缺陷修正、效能優化、新增功能、API、Inspector／編輯器工具、範例、文件及套件化，都必須依循此原則；不只適用於本次入門流程改善。
+
+1. **基本操作有單一推薦路線。** 讓使用者以少量必要設定完成播放、停止與音量調整；文件先展示最常用的做法，再按需求介紹其他選項，避免要求新手先理解整個內部架構。
+2. **名稱與操作結果一致。** 方法名稱、參數及 Inspector 提示應能預示結果，清楚區分單一聲音、整個分類與全域控制。取得 handle 不應改變播放規則；循環、替換與並發各有明確語意。
+3. **預設合理，進階能力按需啟用。** 一般 2D 播放沿用簡單流程；預熱、預載、自訂 Provider、快取政策，以及未來的 3D、DSP、LRU、重要聲音保護均按情境選用。增加能力時，不把進階設定變成基本播放的必填步驟。
+4. **內部優化減少使用負擔。** 優先由系統處理可自動管理的狀態與資源責任。若新能力確實需要呼叫端管理生命週期，提供清楚的持有、取消與釋放方式及最小範例；不只為了效能數字而增加日常呼叫或設定。
+5. **出錯時知道下一步。** 提示應說明具體問題與可採取的修正方式，避免無界重複訊息。API、Inspector、入門文件與可執行範例保持一致，讓使用者能照著操作並確認結果。
+6. **既有使用方式可預期。** 優先維持相容性；必要的行為變更須說明原因、影響與遷移方式。推薦入口保持清楚，避免不斷增加功能相近、難以選擇的入口。
+
+在行為正確與資源安全的前提下，優先選擇步驟、概念與例外較少的方案。若需求需要增加操作複雜度，記錄具體使用情境、必要性，以及如何讓不需要該能力的人繼續使用基本流程。
+
+**每次修改的易用性檢查：** 依改動影響在實作說明或驗收紀錄中簡要確認：
+
+- 改善的是哪一項使用任務；修改前後的必要步驟、參數或設定是否增加，增加時是否有明確理由。
+- 使用者能否由名稱與提示預期行為，基本播放與既有操作是否仍然直覺。
+- 受影響的錯誤提示、文件與範例是否同步，進階功能是否仍可選。
+- 使用流程有變動時，以對應任務實際驗證，例如初次播放、替換語音、停止單一聲音或換場清理；記錄驗證結果與尚未驗證的部分。功能測試通過或效能改善，不能單獨視為易用性已驗收。
+
+純內部或文字修正可簡要註明對使用流程的影響，不要求每次都做完整的新手試用；涉及安裝或入門流程的大幅變更時，再安排乾淨專案與新使用者驗證。
 
 ## 3. 三階段總覽
 
@@ -731,6 +753,56 @@ Editor 工具只檢查被選取音檔；30 秒或 float PCM 估計 8 MiB 以上�
 
 參考：[Unity 音訊匯入](https://docs.unity3d.com/6000.0/Documentation/Manual/class-AudioClip.html)、[Audio Profiler 指標定義](https://docs.unity3d.com/6000.0/Documentation/Manual/ProfilerAudio.html)、[GC.Alloc metadata 範例](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Profiling.RawFrameDataView.GetSampleMetadataAsLong.html)；實際量測 API 以本機 Unity 6000.6.3f1 的 `Contents/Resources/PluginAPI/IUnityProfilerCallbacks.h` 與 `IUnityProfiler.h` 為準。
 
+### 5.14 使用流程與推薦介面（2026-09-30）
+
+依使用者核准的方向，優先降低導入與日常使用的理解成本。本輪沿用既有播放引擎、素材持有、回呼與並發規則，沒有導入外部音訊框架，也沒有開始 UPM／Addressables adapter 拆分。
+
+**已實作的流程**
+
+- 新增 `Controller.Audio.AudioService` 日常入口。六個 ID／clip 播放 overload 均回傳 handle，忽略回傳值不改變播放語意。BGM 共用循環替換槽，SFX（包含 Loop）獨立播放，Voice 預設替換對話槽；只有明確指定 `VoicePlaybackMode.Overlap` 才獨立並發。語音的 Loop 不會切換替換槽。
+- `AudioController` 原公開介面保留；新 Voice 替換入口共用舊非循環語音槽，舊循環分支與 `PlayVoiceHandle` 的並發語意不變。README 說明避免混用兩套對話控制。新入口直接使用原有接納邏輯，保留拒絕／失敗不停止舊聲音的規則。
+- 單一聲音使用 handle；全分類停止使用 StopBgm／StopSfx／StopVoice；全分類淡變只推薦 FadeBus，涵蓋所有入口。淡變持續增益、保存音量、靜音與暫停的差異直接放入操作表。
+- 開發環境的播放失敗預設提示類別、ID、原因及目前設定的內建來源 key／Resources 路徑。訊息明確是 configured lookup，不宣稱有逐次來源查詢軌跡；自訂來源不捏造路徑。相同失敗去重、最多保存 64 種，再顯示一次抑制提示；正常成功路徑不建立診斷字串，一般並發拒絕不自動警告。
+- Controller Inspector 將較少使用的設定折疊，顯示 Ready、播放數及歷史失敗；Play Mode 期間設定欄位避免直接繞過 runtime 更新方法。Bootstrap Inspector 提示未配置來源及不相容元件。
+- 新增可直接開啟的 `Samples/AudioQuickStart.unity`：Prefab、AudioListener、三種素材、播放／停止按鈕與保存音量滑桿。`AudioQuickStart` 的 void adapter 可接 Unity UI 事件。
+- 新增 `SceneAudioSample`：準備素材、保存 handle、取消版本／key 快照、停用清理及重啟；完整換場只停止自己持有的音效，保留仍播放的 BGM 與其他群組。明示 ReleaseUnusedClips 清除全服務普通快取保留；部分區域卸載應由應用程式統一決定此政策。
+- README 改為入門及常見操作，原詳細技術內容移至 `Documentation/AudioServiceReference.md`；換場步驟見 `Documentation/SceneAudio.md`。所有進階機制仍可選，基本播放不必先 Initialize／Preload／PrepareClip／PrewarmSources。
+
+**驗證與界線**
+
+第一輪聚焦回歸 101／101 通過。新增 24 項播放契約／診斷／換場與實際範例場景測試；完整 PlayMode **243／243**、Editor／Reload **18／18** 通過。macOS Player 選定測試在無圖形與批次 Metal 模式各 **104／104** 通過，包含真實打包素材、新場景引用、範例按鈕對應方法、舊 handle 不停止新對話，以及場景卸載後保留跨場景 BGM。驗收對象為功能、建置與生命週期，音訊輸出以狀態／游標驗證，沒有宣稱真人聽感通過。
+
+首次完整 PlayMode 243 項中 242 通過，唯一失敗為批次 Editor 未產生 Game view 截圖；播放、場景引用與卸載檢查已通過。兩次有視窗 Player 嘗試皆在測試開始前逾時，第二次曾使用僅限測試建置的 runInBackground 設定排查；原生 UI 工具隨後確認 Mac 鎖定、無法存取測試視窗。最終改用批次 Metal 完成功能回歸，**視窗截圖、畫面配置與人工操作仍未驗證**。上述失敗 XML／log／timeout status 保留，不以跳過截圖宣稱視覺驗收完成。
+
+這些是 API 契約、場景與建置驗證，尚未做新使用者操作研究，不能宣稱已實測降低多少學習時間。後續以相同任務比較首次成功時間、文件查找與 API 誤用次數。核心仍直接依賴 Addressables；其可選化與 UPM 發布留在第三階段。
+
+證據目錄為本機 `work/usability-20260930/`；測試 XML／log 位於 `work/stage-two-hardening/usability-*`。範例與文件隨專案保留；測試、fixture builder 與 runner 依既有規則只留本機。
+
+### 5.15 範例控制權與集中音訊檢查（2026-09-30）
+
+依 §2.1 的易用性準則，改善「重新播放失敗後仍可停止原本聲音」及「Ready 卻聽不到時知道從哪裡排查」兩項使用任務。基本播放的必要步驟、API 與設定未增加，進階擴充與套件化範圍不變。
+
+**已實作**
+
+- AudioQuickStart 的直接 clip 請求失敗或被拒絕時，保留仍有效的原音樂／語音 handle；停止與 OnDisable 只清理自己持有的聲音。新增操作版本檢查，處理替換完成回呼重入停止、停用或再次播放，避免返回中的舊請求重新取得控制權。範例畫面會顯示音樂／語音未起播的原因。
+- Controller Inspector 的 Audio checks 集中檢查已載入場景中有效 Listener 數量、Controller 啟用／根物件位置與 Mixer 群組／exposed parameters；Play Mode 另顯示 Listener 音量／暫停、遊戲／背景暫停、Master／分類音量、靜音與 FadeBus 歸零。刻意的靜音／暫停等狀態使用資訊提示，附恢復方式，由使用者決定是否調整。
+- 診斷僅在 Editor Inspector 存活時每 0.5 秒更新，並提供立即刷新；不在播放熱路徑查找場景物件，不載入音檔、不初始化服務、不自動修改設定。Prefab 資產及 Prefab Mode 不套用場景 Listener 數量要求；所有已發現的 Mixer 缺失分別列出。
+- 加入 `GetChannelDiagnostics` 的唯讀 Volume／FadeGain／Muted 及 `Diagnostics.GamePaused`／`BackgroundPaused`；這些是服務控制值，沒有把它們當成實際混音波形或可聽見保證。逐分類數值可在 Inspector 展開查看。
+- Inspector 顯示名稱改為 Auto Save／Save Delay 與 Max Concurrent Sounds；保留 `saveImmediately`／`saveDelaySeconds`／`maxVoices` 原序列化名稱、預設值及所有公開 API。Settings Inspector 分開基本儲存設定與 Storage keys，Play Mode 不直接修改 defaults／keys，避免繞過既有設定載入流程。
+- README 的排查入口改為 AudioCtrl → AudioController → Audio checks，再依 Console 的素材失敗訊息處理；進階參考記錄檢查範圍、唯讀 API 及相容性。
+
+**驗收與界線**
+
+修正前已在 Unity 重現 **8／8 失敗**：音樂／語音失敗後停止或停用、被拒絕後清理，以及替換回呼中停用元件。修正後首輪聚焦 **58／58** 通過；再補停止／再次播放重入、唯讀狀態及真實範例場景卸載，完整 PlayMode **258／258** 通過。Editor／Reload **24／24** 通過，包含 Listener 啟用與 additive 場景、Prefab 不需自身 Listener、Mixer 多項缺失、設定相容性、唯讀檢查與解除原因後更新提示。
+
+macOS Player 選定測試在無圖形與批次 Metal 模式各 **119／119** 通過，包含本輪新增播放／控制狀態、實際範例失敗後卸載、既有 packed content 與 HTTP catalog 更新；建置成功，測試無跳過。ProjectSettings 最終與開工快照逐檔雜湊相同，`git diff --check` 通過。
+
+首次 Editor 檢查為 20／24；失敗涉及本機 fixture 的未儲存 additive 場景、PartialMixer 內容假設與 EnterPlayMode 後重跑 SetUp 干擾場景。修正 fixture 並保留產品斷言後重跑至 24／24，首輪結果另存。最初沙箱啟動 Unity 因授權 IPC 受限中止；清理本次遺留的授權程序，依工具核准在可使用本機授權的環境重跑。
+
+本輪桌面操作工具連線逾時，**視窗配置、人工點按與人工聽感尚未驗證**；沒有進行新使用者操作研究。診斷不涵蓋音檔內容、單次播放／相容分支增益、Mixer 效果或作業系統／喇叭輸出；本輪未進行效能前後對照評估，不宣稱 GC、CPU 或學習時間改善幅度。
+
+本輪基準、來源副本、差異與驗證摘要保留於 `work/usability-followup-20260930/`，Editor XML／log 位於 `work/stage-two-hardening/usability-followup-*`。本機測試與工具依 §9.1 保持 Git 忽略，正式程式不依賴它們。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -844,7 +916,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 2. 開工時重新確認本機變更、分支與遠端基準，再建立改善分支並記錄開始提交。目前此 clone 非淺層，無需預先補取歷史。保留使用者未提交的內容，首次提交時明確納入計劃文件，不順帶加入 `.DS_Store`。
 3. 分批完成：基準與測試 → 播放取消 → 淡出一致性 → Addressables 安全性 → handle／素材持有 → 聲源與設定 → 套件與文件。
 4. 每批保留可審查的提交，說明問題、實作、相容性影響與驗證結果；提交正式功能與必要文件，本機測試、輔助腳本與臨時輸出不納入提交。
-5. 每階段通過驗收後再往下一階段推進；新發現的問題記錄到對應階段，避免混入無關功能。
+5. 每批修改依 [2.1 的易用性準則](#21-後續修改的固定易用性準則) 檢查對使用流程的影響；每階段通過驗收後再往下一階段推進。新發現的問題記錄到對應階段，避免混入無關功能。
 6. 發布前彙整安裝方式、升級影響、授權與測試矩陣。遠端推送、PR 與版本發布依後續實作／發布指示執行。
 
 本文件不設定未經基準測試支持的工期。完成標準以可驗證的里程碑為主。
@@ -897,7 +969,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 正式工作副本 | 已由使用者指定；開工時只核對狀態 | `/Users/michael/Unity/Git Repo/unity-audio-service` |
 | Unity 與目標平台支援範圍 | 基準測試與第三階段 | 目前以 `6000.6.3f1` 補齊播放／建置驗證；其他版本與平台以實測納入 |
 | 資源預算與並發預設值 | 第二階段量測後 | 根據代表性場景設定，避免任意給值 |
-| 正式 API 與套件名稱 | 第二、第三階段 | 本文件類別名屬設計方向 |
+| 正式 API 與套件名稱 | 第二、第三階段 | 日常推薦 API 已實作為 `Controller.Audio.AudioService`（5.14）；套件名稱仍於第三階段確定 |
 | 授權與發布形式 | 第三階段發布前 | 由專案擁有者選定，不預先套用授權 |
 
 ## 11. 完成狀態記錄
@@ -922,6 +994,9 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 再次核對五個固定提交的開源專案與官方資料，新增九項邊界／對照測試並確認 R11～R15（179 項 PlayMode 中 172 通過／7 失敗，見 5.11）。
 - [x] 修正 R11～R15，完成按需計數索引、顯式閒置縮池與前後量測；205 項 PlayMode、14 項 EditMode／Reload、78 項 macOS Player 測試通過（見 5.12）。
 - [x] 完成 BGM 載入、正常播放配置及批次控制優化；219 項 PlayMode、18 項 Editor／Reload、101 項 macOS Player 於無圖形／Metal 模式各通過，含 bytes 校驗與持續 GC 觀察（見 5.13）。
+- [x] 完成 AudioService 推薦入口、明確語音語意、開發診斷、Inspector 與入門／換場範例；243 項 PlayMode、18 項 Editor／Reload、104 項 macOS Player 於無圖形／批次 Metal 模式各通過（見 5.14）。
+- [x] 完成範例失敗／拒絕後的控制權與重入修正、Inspector 名稱及唯讀集中檢查；258 項 PlayMode、24 項 Editor／Reload、119 項 macOS Player 於無圖形／批次 Metal 模式各通過（見 5.15）。
+- [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
 
@@ -956,3 +1031,6 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.14 | 2026-09-30 | 重新核對五個開源專案與 Unity／Addressables 官方資料，重現 Provider 釋放重入／例外、Listener 暫停誤判、音訊重設狀態與定位快取五類缺陷 R11～R15；新增九項測試，完整 179 項中 172 通過／7 失敗。列出修正順序及單音效索引／縮池候選；正式 C# 未修改，缺陷尚未修復 |
 | 1.15 | 2026-09-30 | 修正 R11～R15，明訂音訊重設 Failed／Cancelled 政策，加入 Provider 刷新世代、按需單音效計數索引與限量閒置縮池；205 項 PlayMode、14 項 EditMode／Reload、78 項 macOS 無圖形 Player 驗收通過，含真實 HTTP catalog／AssetBundle 更新；保留量測、失敗與修正紀錄及平台限制 |
 | 1.16 | 2026-09-30 | 完成 BGM Streaming／背景準備範例與選用匯入工具、值型設定與淡變、駐留素材直接取得、直接 handle 定位及批次快照重用；補校驗後的配置 bytes、持續 GC 觀察及 24／64／256 聲音量測，見 §5.13 |
+| 1.17 | 2026-09-30 | 以簡單、好用、操作直覺為目標，加入 AudioService 推薦入口、明確語音替換／並發、有界開發診斷、Inspector 提示、可操作場景與換場範例；README 與進階參考分開，保留既有 API，驗證見 §5.14 |
+| 1.18 | 2026-09-30 | 將「簡單、好用、操作直覺」列為所有後續修改的固定準則，補上適用範圍、設計取捨及依改動規模執行的易用性檢查，並從 README 與開發流程連結；僅更新文件 |
+| 1.19 | 2026-09-30 | 修正範例失敗／拒絕後的控制權與回呼重入；新增唯讀集中音訊檢查，改善 Inspector 名稱並保留序列化相容性；依易用性準則記錄使用流程、驗證與界線，見 §5.15 |

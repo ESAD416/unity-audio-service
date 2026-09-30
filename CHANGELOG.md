@@ -1,5 +1,21 @@
 # 變更紀錄
 
+## Unreleased — 範例控制權與集中音訊檢查（2026-09-30）
+
+- 修正 AudioQuickStart 在新音樂／語音失敗或被拒絕後覆蓋舊 handle，導致停止與停用清理失效的問題；保留仍播放聲音的控制權。替換完成回呼中的停止、停用與再次播放，以最新操作為準，避免遺留聲音或覆蓋新 handle。
+- Controller Inspector 新增唯讀 Audio checks：集中顯示有效 Listener、Mixer 群組／參數、靜音、零音量、FadeBus 歸零與暫停原因，附恢復提示。檢查不載入音檔、不更改設定，只在 Editor Inspector 存活時更新；不代表已驗證音訊輸出或聽感。
+- Inspector 將 Save Immediately 改顯示為 Auto Save／Save Delay，Max Voices 改顯示為 Max Concurrent Sounds；保留原序列化名稱、API、預設值及行為。
+- 新增唯讀 GetChannelDiagnostics 與 Diagnostics 的遊戲／背景暫停狀態，供診斷使用；基本播放方式維持不變。
+- PlayMode 258／258、Editor／Reload 24／24、macOS Player 無圖形／批次 Metal 各 119／119 通過。本輪桌面工具連線逾時，畫面／人工操作與聽感未驗收；詳見改善計畫 §5.15，測試與輔助資料依原規則僅留本機。
+
+## Unreleased — 入門流程與一致播放介面（2026-09-30）
+
+- 新增 `Controller.Audio.AudioService` 日常入口，所有 Play 方法回傳 handle；取得或忽略 handle 不改播放行為。BGM 替換並循環，SFX 獨立播放，Voice 預設替換對話槽，明確選用 `VoicePlaybackMode.Overlap` 才並發。
+- 原 `AudioController` 方法及 UnityEvent 可使用的 void 簽章保留。新 Voice 預設共用舊非循環語音槽；舊 `PlayVoiceHandle` 仍獨立並發、舊循環槽仍保留。全分類操作只推薦 FadeBus／Stop*，不改舊 FadeChannel 的分支語意。
+- Editor／Development Build 預設提示有界、去重的播放失敗，包含目前設定的來源 key／路徑；可由 Controller 的 Log Playback Failures 關閉。此為設定診斷，不是實際逐次來源追蹤；一般 Rejected 不自動警告。
+- 新增 Controller／Bootstrap Inspector 提示、可操作的 AudioQuickStart 場景、Unity UI adapter 與 SceneAudioSample；README 改為基本導入，技術契約移至 Documentation，完整換場與取消範例另附說明。
+- 本輪 PlayMode 243／243、Editor／Reload 18／18、macOS Player 無圖形／批次 Metal 各 104／104 通過，詳見改善計畫 §5.14。Mac 鎖定期間未完成視窗畫面／人工操作驗收；尚未做新使用者操作時間研究。核心的 Addressables 依賴仍在，尚未拆為 UPM。
+
 ## Unreleased — BGM 載入、播放配置與批次控制（2026-09-30）
 
 - 兩首範例 BGM 改用 Streaming＋背景載入；保留品質／取樣率，SFX 與 Voice 設定不變。新增選用的 Audio Imports 檢查／Default profile，以及可取消的準備／播放 DebugMenu 範例。

@@ -1,0 +1,5 @@
+{
+  "name": "Controller.Audio.Samples",
+  "references": ["Controller.Audio"],
+  "autoReferenced": true
+}

@@ -60,6 +60,12 @@ namespace Controller.Audio
             { pair.Value.Retained = false; ReleaseIfUnused(pair.Key, pair.Value); }
         }
         private void OnDestroy() => ClearCache();
+        internal string DescribeLookup(AudioClipAddress address)
+        {
+            string key = address.ResourcesKey ?? address.Id;
+            return string.IsNullOrWhiteSpace(key) ? "Resources disabled (empty key)"
+                : $"Resources path='{BuildPath(address.Category, key)}'";
+        }
         private string BuildPath(AudioCategory category, string key)
         {
             string folder = category == AudioCategory.Bgm ? bgmPath : category == AudioCategory.Sfx ? sfxPath : voicePath;

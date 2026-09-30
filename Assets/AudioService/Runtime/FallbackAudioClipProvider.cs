@@ -24,6 +24,8 @@ namespace Controller.Audio
         }
         public void Configure(IAudioClipProvider primary, IAudioClipProvider secondary, AudioFallbackPolicy selection)
         { generation++; main = primary; backup = secondary; policy = selection; Changed?.Invoke(); }
+        internal string DescribeLookup(AudioClipAddress address, int depth)
+            => $"Fallback {policy}; primary [{AudioFailureLog.DescribeProvider(main, address, depth + 1)}]; backup [{AudioFailureLog.DescribeProvider(backup, address, depth + 1)}]";
         private T Ensure<T>(string childName) where T : MonoBehaviour
         {
             var child = transform.Find(childName);

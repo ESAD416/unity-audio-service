@@ -8,6 +8,9 @@ namespace Controller.Audio
     public class AudioController : MonoBehaviour
     {
         [SerializeField] private bool verboseLogging;
+        [Tooltip("Show bounded, deduplicated playback failures in the Editor and Development Builds. Normal concurrency rejections remain available on the handle.")]
+        [SerializeField] private bool logPlaybackFailures = true;
+        private AudioFailureLog failureLog;
         private bool VerboseLogging => verboseLogging;
         public static AudioController Instance { get; private set; }
         [SerializeField] private AudioMixer mixer;
@@ -62,9 +65,10 @@ namespace Controller.Audio
             if (Instance != null && ReferenceEquals(Instance.clipProvider, old)) Instance.SetClipProvider(null);
         }
         public void SetClipProvider(IAudioClipProvider provider)
-        { if (ReferenceEquals(clipProvider, provider)) return; DetachProviderNotifications(); clipProvider = provider; engine?.SetProvider(provider); AttachProviderNotifications(); }
+        { if (ReferenceEquals(clipProvider, provider)) return; failureLog = null; DetachProviderNotifications(); clipProvider = provider; engine?.SetProvider(provider); AttachProviderNotifications(); }
         public void RefreshClipProvider()
         {
+            failureLog = null;
             // Publish new lookup data before cancellation callbacks can request playback.
             if (catalog != null) catalog.RebuildIndex();
             if (Ready) engine?.SetProvider(clipProvider, true, true);
@@ -81,6 +85,7 @@ namespace Controller.Audio
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
             if (Ready) { AttachAudioConfiguration(); return; }
+            failureLog = null;
             if (transform.parent == null) DontDestroyOnLoad(gameObject);
             if (catalog != null) catalog.RebuildIndex();
             if (!AudioValues.Alive(clipProvider)) clipProvider = AudioValues.Alive(globalProvider) ? globalProvider : null;
@@ -125,6 +130,11 @@ namespace Controller.Audio
             engine.Tick(Time.unscaledDeltaTime);
         }
         internal void ReportFailure(string message) { if (verboseLogging) Debug.LogWarning("[AudioController] " + message, this); }
+        internal void ReportPlaybackFailure(AudioHandle handle, string reason, AudioClipAddress address = null, bool allowAsync = true)
+        {
+            if (logPlaybackFailures && (Application.isEditor || Debug.isDebugBuild))
+                (failureLog ??= new AudioFailureLog()).Report(this, handle, reason, address, allowAsync);
+        }
 
         private void LoadAudioMixer()
         {
@@ -237,20 +247,24 @@ namespace Controller.Audio
             if (catalog != null && catalog.TryResolve(category, id, out var address)) return address;
             return new AudioClipAddress(id.Value, category);
         }
-        private AudioHandle Request(AudioCategory category, AudioId id, AudioClip clip, PlayOptions options, int bank)
+        internal AudioHandle Request(AudioCategory category, AudioId id, AudioClip clip, PlayOptions options, int bank)
         {
             if (!Ready || engine == null)
             {
                 var failed = new AudioHandle { AudioId = id, Category = category };
-                failed.Finish(AudioCompletion.Failed, "Audio service is not ready"); return failed;
+                failed.Finish(AudioCompletion.Failed, "Audio service is not ready");
+                ReportPlaybackFailure(failed, "Audio service is not ready. Enable AudioCtrl.prefab and call playback from Start or later");
+                return failed;
             }
             return engine.Play(category, clip == null ? Resolve(category, id) : null, clip, options, bank);
         }
         public AudioHandle Play(AudioCategory category, AudioId id, PlayOptions options = null) => Request(category, id, null, options, -1);
         public AudioHandle Play(AudioCategory category, AudioClip clip, PlayOptions options = null) => Request(category, default, clip, options, -1);
+        /// <summary>Compatibility API. New code can use AudioService.PlayBgm, which also returns a handle.</summary>
         public AudioHandle PlayBgmHandle(AudioId id, PlayOptions options = null)
             => Request(AudioCategory.Bgm, id, null, options, 0);
         public AudioHandle PlaySfxHandle(AudioId id, PlayOptions options = null) => Play(AudioCategory.Sfx, id, options);
+        /// <summary>Compatibility API: independent overlapping voices. AudioService.PlayVoice defaults to dialogue replacement.</summary>
         public AudioHandle PlayVoiceHandle(AudioId id, PlayOptions options = null) => Play(AudioCategory.Voice, id, options);
 
         public void PlayBgm(AudioClip clip, float fadeOutSeconds = 0f, float fadeInSeconds = 0f)
@@ -272,6 +286,7 @@ namespace Controller.Audio
         public void FadeBgmOut(float seconds, bool stopAfter = true) => FadeChannel(AudioChannel.Bgm, 0, seconds, stopAfter);
         public void FadeSfxLoopTo(float targetVolume, float seconds) => FadeChannel(AudioChannel.Sfx, targetVolume, seconds, false, true);
         public void FadeVoiceLoopTo(float targetVolume, float seconds) => FadeChannel(AudioChannel.Voice, targetVolume, seconds, false, true);
+        /// <summary>Compatibility API: Bgm/Sfx/Voice affect only the selected legacy branch. Use FadeBus for an entire category.</summary>
         public void FadeChannel(AudioChannel channel, float targetVolume, float seconds, bool stopAfter = false, bool useLoopSource = false)
         {
             if (!Ready || (int)channel < 0 || (int)channel > 3) return;
@@ -331,6 +346,13 @@ namespace Controller.Audio
             try { SetVolume(channel, value); } finally { applyingSettings = previous; }
         }
         public float GetVolume(AudioChannel channel) => (int)channel >= 0 && (int)channel < 4 ? volumes[(int)channel] : 0;
+        /// <summary>Read service controls without changing playback. Does not measure audible output or mixer effects.</summary>
+        public AudioChannelDiagnostics GetChannelDiagnostics(AudioChannel channel)
+        {
+            if ((int)channel < 0 || (int)channel >= 4) return default;
+            return engine != null ? engine.GetChannelDiagnostics(channel, GetVolume(channel))
+                : new AudioChannelDiagnostics(GetVolume(channel), 1f, false);
+        }
         public void SetMasterVolume(float normalizedVolume) => SetVolume(AudioChannel.Master, normalizedVolume);
         public void SetBgmVolume(float normalizedVolume) => SetVolume(AudioChannel.Bgm, normalizedVolume);
         public void SetSfxVolume(float normalizedVolume) => SetVolume(AudioChannel.Sfx, normalizedVolume);

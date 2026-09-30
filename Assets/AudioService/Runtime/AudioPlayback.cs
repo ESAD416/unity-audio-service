@@ -104,11 +104,21 @@ namespace Controller.Audio
         internal static bool Alive(object value) => value != null && (!(value is UnityEngine.Object obj) || obj != null);
     }
 
+    /// <summary>Read-only controls for one channel, before Master, listener and mixer effects are combined.</summary>
+    public readonly struct AudioChannelDiagnostics
+    {
+        public readonly float Volume, FadeGain;
+        public readonly bool Muted;
+        internal AudioChannelDiagnostics(float volume, float fadeGain, bool muted)
+        { Volume = volume; FadeGain = fadeGain; Muted = muted; }
+    }
+
     public readonly struct AudioDiagnostics
     {
         public readonly int Playing, Paused, Loading, PooledSources, CreatedSources, CachedClips, ClipUsers, PendingLoads, PreparingClips;
         public readonly string LastFailure;
-        internal AudioDiagnostics(int playing, int paused, int loading, int pooled, int created, int cached, int users, int pending, string failure, int preparing = 0)
-        { Playing = playing; Paused = paused; Loading = loading; PooledSources = pooled; CreatedSources = created; CachedClips = cached; ClipUsers = users; PendingLoads = pending; LastFailure = failure; PreparingClips = preparing; }
+        public readonly bool GamePaused, BackgroundPaused;
+        internal AudioDiagnostics(int playing, int paused, int loading, int pooled, int created, int cached, int users, int pending, string failure, int preparing = 0, bool gamePaused = false, bool backgroundPaused = false)
+        { Playing = playing; Paused = paused; Loading = loading; PooledSources = pooled; CreatedSources = created; CachedClips = cached; ClipUsers = users; PendingLoads = pending; LastFailure = failure; PreparingClips = preparing; GamePaused = gamePaused; BackgroundPaused = backgroundPaused; }
     }
 }
