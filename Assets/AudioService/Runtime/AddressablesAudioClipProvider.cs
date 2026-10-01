@@ -18,6 +18,10 @@ namespace Controller.Audio
             public AudioClip Clip;
             public bool Complete, Released;
             public int Users, Deliveries;
+            // Lookup ownership is separate from legacy cache retention. Most
+            // operations have one key; only multiple aliases need a collection.
+            public string LookupKey;
+            public List<string> OtherLookupKeys;
             public readonly HashSet<string> CachedAliases = new();
             public readonly List<Request> Waiters = new();
         }
@@ -91,7 +95,39 @@ namespace Controller.Audio
                 operations[identity] = op;
                 var owned = op; op.Handle.Completed += _ => Complete(owned);
             }
-            aliases[request.Key] = op; Join(request, op);
+            BindAlias(request.Key, op);
+            Join(request, op);
+        }
+        private void BindAlias(string key, Operation op)
+        {
+            if (aliases.TryGetValue(key, out var previous))
+            {
+                if (ReferenceEquals(previous, op)) return;
+                if (previous.LookupKey == key) previous.LookupKey = null;
+                else previous.OtherLookupKeys?.Remove(key);
+            }
+            aliases[key] = op;
+            if (op.LookupKey == null) op.LookupKey = key;
+            // The forward map already excludes duplicate bindings; an extra
+            // hash index would add memory without helping the release scan.
+            else (op.OtherLookupKeys ??= new List<string>()).Add(key);
+        }
+        private void RemoveAliases(Operation op)
+        {
+            RemoveAlias(op.LookupKey, op);
+            if (op.OtherLookupKeys != null)
+                foreach (var key in op.OtherLookupKeys) RemoveAlias(key, op);
+            ClearLookupKeys(op);
+        }
+        private void RemoveAlias(string key, Operation op)
+        {
+            // An old leased operation must not remove a freshly rebound key.
+            if (key != null && aliases.TryGetValue(key, out var current) && ReferenceEquals(current, op)) aliases.Remove(key);
+        }
+        private static void ClearLookupKeys(Operation op)
+        {
+            op.LookupKey = null;
+            op.OtherLookupKeys = null;
         }
         private void Join(Request request, Operation op)
         {
@@ -134,8 +170,7 @@ namespace Controller.Audio
             if (op.Released || op.Deliveries > 0 || op.Users > 0 || op.CachedAliases.Count > 0 || op.Waiters.Exists(r => !r.Finished)) return;
             op.Released = true; op.Clip = null;
             if (operations.TryGetValue(op.Identity, out var current) && ReferenceEquals(current, op)) operations.Remove(op.Identity);
-            var keys = new List<string>(); foreach (var pair in aliases) if (ReferenceEquals(pair.Value, op)) keys.Add(pair.Key);
-            foreach (var key in keys) aliases.Remove(key);
+            RemoveAliases(op);
             if (op.Handle.IsValid())
             {
                 try { Addressables.Release(op.Handle); }
@@ -180,7 +215,7 @@ namespace Controller.Audio
                 // Detach the generation before cancellation or native release can
                 // reenter acquisition. Old users own their operations via leases.
                 knownLocations.Clear(); aliases.Clear(); operations.Clear();
-                foreach (var op in oldOperations) op.CachedAliases.Clear();
+                foreach (var op in oldOperations) { op.CachedAliases.Clear(); ClearLookupKeys(op); }
                 foreach (var request in oldRequests) CancelRequest(request);
                 foreach (var op in oldOperations) ReleaseIfUnused(op);
             }
@@ -193,7 +228,12 @@ namespace Controller.Audio
             if (initialization.IsValid()) Addressables.Release(initialization);
             initialization = default;
             foreach (var request in requests.ToArray()) ReleaseClip(AudioCategory.Bgm, request.Key);
-            foreach (var op in new List<Operation>(operations.Values)) { op.CachedAliases.Clear(); ReleaseIfUnused(op); }
+            foreach (var op in new List<Operation>(operations.Values))
+            {
+                op.CachedAliases.Clear();
+                RemoveAliases(op);
+                ReleaseIfUnused(op);
+            }
             knownLocations.Clear(); aliases.Clear(); operations.Clear();
             // Outstanding leases deliberately retain the native handle after this component is destroyed.
         }
