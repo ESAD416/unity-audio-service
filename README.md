@@ -142,6 +142,8 @@ Inspector 的 `Max Concurrent Sounds` 是 BGM、SFX、Voice 合計的並發請�
 
 目前是 Unity 專案，UPM 套件拆分尚未開始。驗證環境為 Unity 6000.6.3f1、Addressables 2.11.2、Test Framework 1.8.0；即使只用 Resources，Runtime assembly 目前仍要求安裝 Addressables。範例不代表已驗證其他版本或平台。
 
-最新功能回歸：PlayMode 258／258、Editor／Reload 24／24，macOS Player 無圖形與批次 Metal 各 119／119 通過。範例場景的引用、播放失敗後控制／卸載與診斷唯讀行為已測試；本輪桌面工具連線逾時，視窗畫面與人工操作仍未驗收，也尚未進行新使用者操作研究。
+最新回歸：PlayMode 275／275、Editor／Reload 24／24，macOS Player 無圖形與批次 Metal 各 159／159 通過，包含真實 packed content／catalog 更新、範例控制／卸載及素材生命週期。視窗畫面、人工操作與聽感仍未驗收，也尚未進行新使用者操作研究。
+
+已降低暖快取播放配置，讓平常音量更新排除動態閒置聲源，並縮小 Addressables 釋放時的別名查找範圍。同機 Editor 的指定暖快取測點由每次 424 降至 192 bytes；效能數字、索引建立成本與適用條件見改善計畫 §5.17，基本呼叫方式不變。
 
 可靠性、效能與本輪使用流程驗證見[改善計畫](unity-audio-service-improvement-plan.md)，相容性紀錄見 [CHANGELOG](CHANGELOG.md)。入門場景和範例會隨專案提供；本機測試及工具依既有規則留在受 Git 忽略的 Tests／Tools／work。

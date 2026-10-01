@@ -132,6 +132,7 @@ audio.ReleaseUnusedClips();
 - `ReleaseGroup` 取消該群組尚未完成的預載與資料準備，移除群組保留；不會停止使用中的聲音，也不清除其他群組／普通快取的保留。
 - `ReleaseUnusedClips` 清除普通快取保留；有播放使用者或群組保留時，素材持續有效。
 - 原始 `ReleaseClip` 不會使內建 Provider 的有效 lease 提前失效。Provider 更換／銷毀後，已取得的播放 lease 仍保持到最後使用者離開。
+- Addressables 操作各自記錄目前查找別名，釋放時只移除自身映射；此索引不構成快取保留。單一別名使用欄位，多別名才建立清單；查找刷新先切開舊世代，舊 lease 的釋放不會刪除新映射，最後使用者離開後才釋放 native handle。
 - Resources 在最後 lease／快取保留離開後移除自身引用，不強制 `UnloadAsset`，避免傷及外部持有者；實際 native 記憶體回收依 Unity 的未使用資產清理。
 - 直接傳入的 AudioClip 不納入 Provider 的卸載責任。不要由外部主動銷毀仍在播放的 clip。
 - 舊的全量預載旗標仍可明確開啟，但預設使用按需載入與上述指定群組預載。尚未加入 LRU／記憶體預算淘汰。
@@ -196,6 +197,8 @@ int removed = audio.TrimIdleSources(minimumCapacity: 32, maxToRemove: 16);
 
 內部設定與淡變使用值資料；handle 直接定位播放資料，完成即清除內部引用，公開 handle 仍各自保留最終結果。批次控制重用快照緩衝並維持原有播放順序；首次緩衝擴張、正常播放、完成事件與使用者回呼仍可能配置。24／64／256 聲音的 CPU、配置 bytes 與持續 GC 觀察見改善計畫 §5.13。
 
+暖快取播放以內部值資料持有素材，省去逐次建立 user lease／釋放閉包；無 Catalog 的預設地址延後至真正載入時才建立。直接 clip 的 ID 依 managed 物件身分弱參照快取，Shutdown 清空，不因此延長 clip 的持有時間。公開 handle、Provider lease 及晚訂閱契約不變；播放仍有配置，前後量測與索引成本見改善計畫 §5.17。
+
 ## 音量與設定
 
 最終音量由玩家 Master／分類設定、暫時 Master／分類增益、舊 API 分支增益、單次播放音量與播放包絡組成。Mixer 可用時玩家設定由 Mixer 套用；`SetMixer(null)` 明確使用無 Mixer 模式，由來源計算相同音量。預設會尋找 `Resources/Audio/MasterMixer`。
@@ -203,6 +206,7 @@ int removed = audio.TrimIdleSources(minimumCapacity: 32, maxToRemove: 16);
 - Mixer 群組為 BGM／Sound／Voice，exposed parameter 為 `masterVolume`／`bgmVolume`／`soundVolume`／`voiceVolume`。`ValidateMixer()` 與 `LastMixerIssue` 提供基本診斷；缺失的路由／參數使用來源增益備援。
 - `SetMasterVolume`／`SetBgmVolume`／`SetSfxVolume`／`SetVoiceVolume` 經已綁定 handler 同步儲存與事件。Bootstrap 的 `ApplyVolume(..., persist:false)` 可暫時調整而不寫回設定。
 - 同值設定省略音訊套用，但仍可把先前的暫時音量存入 handler；`VolumeChanged` 僅在有效數值改變時通知。Mixer 更新只寫入改變的通道；有聲源備援增益變化時才更新聲源。初始化及 `SetMixer(...)` 仍會完整套用四個通道。
+- 增益更新巡訪使用中（含暫停）的聲源，依受影響分類／舊分支篩選，Tick 合併分類淡變與個別包絡的套用。五個相容聲源即使閒置也保留可觀察音量；動態閒置聲源在再次起播時套用最新值，不因池的歷史峰值擴大平常音量更新範圍。
 - `FadeBus` 涵蓋該分類所有新舊實例；`FadeChannel(Sfx/Voice, ..., useLoopSource)` 保留舊 API 的循環／非循環分支，只影響經舊入口建立的聲音。
 - `FadeChannel(Master)`／`FadeBus(Master)` 涵蓋全部分類。停止淡出只作用於呼叫當時的播放，後續新播放不受舊停止流程控制。
 - 非停止淡出的分類／分支增益持續有效。停止或重播只重設播放包絡，不覆寫玩家設定，也不清除刻意設定的分類衰減。
