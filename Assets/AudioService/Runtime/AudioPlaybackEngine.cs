@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace Controller.Audio
@@ -32,6 +33,7 @@ namespace Controller.Audio
             public PlaybackOptions Options;
             public AudioClip Clip;
             public AudioClipLease Lease;
+            public AudioClipStore.Usage ResidentUsage;
             public Action CancelLoad;
             public Emitter Emitter;
             public int Bank;
@@ -67,6 +69,16 @@ namespace Controller.Audio
         private bool disposed, gamePaused, backgroundPaused, listenerPaused;
         private AudioClipStore store;
         private IAudioClipProvider provider;
+        private sealed class ExternalId { public AudioId Id; }
+        private ConditionalWeakTable<AudioClip, ExternalId> externalIds;
+        private static readonly ConditionalWeakTable<AudioClip, ExternalId>.CreateValueCallback CreateExternalId
+            = clip => new ExternalId { Id = new AudioId("external:" + clip.GetEntityId().ToString()) };
+        private AudioId Identify(AudioClip clip)
+        {
+            // Cache by managed identity without extending the caller's clip lifetime.
+            externalIds ??= new ConditionalWeakTable<AudioClip, ExternalId>();
+            return externalIds.GetValue(clip, CreateExternalId).Id;
+        }
         public string LastFailure { get; private set; }
         public int MaxVoices { get; set; }
         public AudioConcurrencyPolicy ConcurrencyPolicy { get; set; }
@@ -201,19 +213,20 @@ namespace Controller.Audio
             if (!emitter.Reserved && !emitter.InPool) { emitter.Bank = -1; emitter.InPool = true; pool.Push(emitter); }
             ApplyGain(emitter);
         }
-        public AudioHandle Play(AudioCategory category, AudioClipAddress address, AudioClip direct, PlayOptions supplied, int bank = -1)
+        public AudioHandle Play(AudioCategory category, AudioClipAddress address, AudioClip direct, PlayOptions supplied, int bank = -1, AudioId id = default)
         {
             using var mutation = callbacks.Begin();
-            var handle = new AudioHandle { Id = ++nextId, AudioId = new AudioId(address?.Id ?? (direct != null ? "external:" + direct.GetEntityId().ToString() : null)), Category = category, Owner = this };
-            if (disposed || !host.Ready || (int)category < 0 || (int)category > 2 || (direct == null && string.IsNullOrWhiteSpace(address?.Id)))
+            string key = address?.Id ?? id.Value;
+            var handle = new AudioHandle { Id = ++nextId, AudioId = direct != null ? Identify(direct) : new AudioId(key), Category = category, Owner = this };
+            if (disposed || !host.Ready || (int)category < 0 || (int)category > 2 || (direct == null && string.IsNullOrWhiteSpace(key)))
             { Reject(handle, AudioCompletion.Failed, "Service unavailable or empty audio id/clip"); return handle; }
             int maxInstances = Mathf.Max(0, supplied?.MaxInstances ?? 0);
             if (maxInstances == 0 && address != null) maxInstances = Mathf.Max(0, address.MaxInstances);
             if (!TryPlanAdmission(handle, bank, maxInstances, supplied?.ConcurrencyPolicy ?? AudioConcurrencyPolicy.RejectNew, out var victims)) return handle;
-            StartAccepted(handle, address, direct, supplied, bank, victims);
+            StartAccepted(handle, key, address, direct, supplied, bank, victims);
             return handle;
         }
-        private void StartAccepted(AudioHandle handle, AudioClipAddress address, AudioClip direct, PlayOptions supplied, int bank, Playback[] victims)
+        private void StartAccepted(AudioHandle handle, string key, AudioClipAddress address, AudioClip direct, PlayOptions supplied, int bank, Playback[] victims)
         {
             // Snapshot before eviction can release a provider lease or invoke external code.
             var options = new PlaybackOptions(supplied, bank == 0);
@@ -234,8 +247,8 @@ namespace Controller.Audio
             }
             // All one-shots now have their own source, including the legacy convenience API.
             if (direct != null) Loaded(playback, direct);
-            else if (store.TryAcquireResident(address, out var lease)) Loaded(playback, lease.Clip, lease);
-            else RequestClip(playback, address);
+            else if (store.TryAcquireResident(handle.Category, key, out var usage)) Loaded(playback, usage.Clip, usage: usage);
+            else RequestClip(playback, address ?? new AudioClipAddress(key, handle.Category));
         }
         private void RequestClip(Playback playback, AudioClipAddress address)
         {
@@ -293,21 +306,22 @@ namespace Controller.Audio
             LastFailure = reason; handle.Finish(result, reason); host.ReportFailure(reason);
             if (result == AudioCompletion.Failed) host.ReportPlaybackFailure(handle, reason);
         }
-        private void Loaded(Playback playback, AudioClip clip, AudioClipLease lease = null, AudioClipAddress address = null)
+        private void Loaded(Playback playback, AudioClip clip, AudioClipLease lease = null, AudioClipAddress address = null, AudioClipStore.Usage usage = default)
         {
             using var mutation = callbacks.Begin();
-            if (disposed || playback.Handle.IsFinished) { AudioCallbacks.Dispose(lease); return; }
+            if (disposed || playback.Handle.IsFinished) { usage.Dispose(); AudioCallbacks.Dispose(lease); return; }
             SyncListenerPause();
             playback.CancelLoad = null;
             if (clip == null)
             {
+                usage.Dispose();
                 AudioCallbacks.Dispose(lease);
                 string reason = "Clip load failed: " + playback.Handle.AudioId;
                 Finish(playback, AudioCompletion.Failed, reason);
                 host.ReportPlaybackFailure(playback.Handle, reason, address, playback.Options.AllowAsyncLoad);
                 return;
             }
-            playback.Lease = lease; playback.Clip = clip;
+            playback.Lease = lease; playback.ResidentUsage = usage; playback.Clip = clip;
             if (playback.Emitter == null)
             {
                 var primary = reserved[1];
@@ -346,6 +360,7 @@ namespace Controller.Audio
             RemoveActive(playback);
             var cancel = playback.CancelLoad; playback.CancelLoad = null;
             var lease = playback.Lease; playback.Lease = null;
+            var usage = playback.ResidentUsage; playback.ResidentUsage = default;
             playback.Clip = null;
             var emitter = playback.Emitter;
             if (emitter != null)
@@ -358,7 +373,7 @@ namespace Controller.Audio
             playback.Handle.Finish(result, reason);
             // Store leases update internal counts now. Actual provider releases
             // are queued by the store until this entire engine mutation commits.
-            AudioCallbacks.Invoke(cancel); AudioCallbacks.Dispose(lease);
+            AudioCallbacks.Invoke(cancel); usage.Dispose(); AudioCallbacks.Dispose(lease);
         }
         public bool Stop(AudioHandle handle, float seconds) => StopAt(handle, seconds, 0f);
         private bool StopAt(AudioHandle handle, float seconds, float target)
@@ -604,6 +619,7 @@ namespace Controller.Audio
             foreach (var p in active.ToArray()) Finish(p, p.Handle.State == AudioPlaybackState.Loading ? AudioCompletion.Cancelled : AudioCompletion.Stopped);
             foreach (var preparation in preparations.ToArray()) FinishPreparation(preparation, false);
             store.Dispose();
+            externalIds = null;
             foreach (var e in emitters) if (!e.Reserved && e.Source != null) UnityEngine.Object.Destroy(e.Source.gameObject);
             pool.Clear();
         }

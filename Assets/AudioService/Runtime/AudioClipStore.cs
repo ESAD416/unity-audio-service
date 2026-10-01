@@ -7,8 +7,8 @@ namespace Controller.Audio
 {
     internal sealed class AudioClipStore
     {
-        private sealed class Waiter { public Action<AudioClipLease> Callback; public string Group; }
-        private sealed class Entry
+        internal sealed class Waiter { public Action<AudioClipLease> Callback; public string Group; }
+        internal sealed class Entry
         {
             public (AudioCategory Category, string Id) Key;
             public AudioClipLease Lease;
@@ -16,6 +16,24 @@ namespace Controller.Audio
             public int Users;
             public readonly HashSet<string> Groups = new();
             public readonly List<Waiter> Waiters = new();
+        }
+        // Internal playback owns this value in exactly one field. Clear that field
+        // before returning the user so reentrant cleanup cannot release it twice.
+        internal struct Usage : IDisposable
+        {
+            private AudioClipStore owner;
+            private Entry entry;
+            internal Usage(AudioClipStore owner, Entry entry) { this.owner = owner; this.entry = entry; }
+            public AudioClip Clip => entry?.Lease?.Clip;
+            public void Dispose()
+            {
+                var store = owner;
+                var retained = entry;
+                this = default;
+                if (retained == null) return;
+                retained.Users--;
+                store.Cleanup(retained);
+            }
         }
         private static readonly Action NoCancellation = () => { };
         private readonly Dictionary<(AudioCategory, string), Entry> entries = new();
@@ -35,13 +53,16 @@ namespace Controller.Audio
             if (entries.TryGetValue(Key(address), out var entry)) clip = entry.Lease?.Clip;
             return clip != null;
         }
-        public bool TryAcquireResident(AudioClipAddress address, out AudioClipLease lease)
+        public bool TryAcquireResident(AudioCategory category, string id, out Usage usage)
         {
-            lease = null;
-            if (disposed || !AudioValues.Alive(provider) || !entries.TryGetValue(Key(address), out var entry)
+            usage = default;
+            if (disposed || !AudioValues.Alive(provider) || !entries.TryGetValue((category, id), out var entry)
                 || entry.Loading || entry.Lease?.Clip == null) return false;
             // Ordinary playback retains the entry exactly as Request(group: null).
-            entry.Retained = true; lease = AcquireUser(entry); return true;
+            entry.Retained = true;
+            entry.Users++;
+            usage = new Usage(this, entry);
+            return true;
         }
         private AudioClipLease AcquireUser(Entry entry)
         {

@@ -256,7 +256,9 @@ namespace Controller.Audio
                 ReportPlaybackFailure(failed, "Audio service is not ready. Enable AudioCtrl.prefab and call playback from Start or later");
                 return failed;
             }
-            return engine.Play(category, clip == null ? Resolve(category, id) : null, clip, options, bank);
+            AudioClipAddress address = null;
+            if (clip == null && catalog != null && catalog.TryResolve(category, id, out var resolved)) address = resolved;
+            return engine.Play(category, address, clip, options, bank, id);
         }
         public AudioHandle Play(AudioCategory category, AudioId id, PlayOptions options = null) => Request(category, id, null, options, -1);
         public AudioHandle Play(AudioCategory category, AudioClip clip, PlayOptions options = null) => Request(category, default, clip, options, -1);
