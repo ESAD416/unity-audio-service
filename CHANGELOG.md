@@ -1,5 +1,13 @@
 # 變更紀錄
 
+## Unreleased - Catalog 與素材交付精簡（2026-10-01）
+
+- Catalog 每筆保存一份不可變解析資料，ID／alias 索引只保存位置，完整建立後一次發布；保留大小寫、首筆衝突優先、無效 ID 及 null／空來源 key 語意。
+- 分開 AudioCatalog 映射更新與 Provider 底層刷新。ReplaceEntries、Catalog 指派及序列化變更只更新服務自己的需求／快取世代，不取消外部直接取得素材的請求；來源內容更新仍用 RefreshClipProvider 或 Changed，舊播放 lease 保持有效。
+- Store 的兩份交付暫存改為單一快照，仍先保留整批 lease 再回呼；合併三次診斷掃描，移除只有單一呼叫者的 StopAt 轉送層。PrepareClip 拆分延後，未新增播放 API 或改設定／Prefab。
+- 同機 Editor、1,000 筆各一個 alias 的索引重建配置每次 158,788 → 124,196 bytes；32 份索引的增量堆觀察約每份 160 → 128 KiB。完全無 alias 時配置增加，詳見改善計畫 §5.19；不宣稱全面加速或零配置。
+- 完整 PlayMode 301／301、Editor／Reload 25／25、macOS Player 無圖形／批次 Metal 各 228／228 通過，Resources-only 獨立建置及播放 smoke 通過。測試／工具仍只留本機，其他平台、IL2CPP 與人工聽感未驗收。
+
 ## Unreleased - 架構收斂與技術債重構（2026-10-01）
 
 - 播放收斂為 BGM／對話替換槽與獨立播放，共用動態聲源池；移除五個固定相容聲源、bank／分支增益與淡變，以及 Controller 舊播放包裝。Loading 不先占用 AudioSource；保留取消、回呼重入、素材持有、舊 handle 失效與暫停保護。

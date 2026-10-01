@@ -143,8 +143,8 @@ Inspector 的 `Max Concurrent Sounds` 是 BGM、SFX、Voice 合計的並發請�
 
 目前是 Unity 專案，尚未完成 UPM 套件交付。驗證環境為 Unity 6000.6.3f1、Addressables 2.11.2、Test Framework 1.8.0。核心不再引用 Addressables；可選整合位於 `Integrations/Addressables`。範例不代表已驗證其他版本或平台。
 
-本輪重構：PlayMode 285／285、Editor／Reload 24／24、macOS Player 無圖形／批次 Metal 各 209／209 通過。未安裝 Addressables 的乾淨專案亦完成獨立 Player 建置與播放驗證；詳見改善計畫 §5.18。視窗畫面、人工操作與聽感仍未驗收，也尚未進行新使用者操作研究。
+本輪後續精簡：PlayMode 301／301、Editor／Reload 25／25、macOS Player 無圖形／批次 Metal 各 228／228 通過。未安裝 Addressables 的獨立專案亦重新完成 Player 建置與播放驗證；詳見改善計畫 §5.19。視窗畫面、人工操作與聽感仍未驗收，也尚未進行新使用者操作研究。
 
-先前的暖播放與別名釋放優化保留；指定暖快取測點仍為每次 192 bytes。本輪移除五個固定相容聲源並降低相關增益更新工作，Catalog 不可變索引則增加了記憶體與重建成本；並非所有 CPU 測點都更快。歷次量測、取捨與適用條件見改善計畫 §5.17～5.18。
+先前的暖播放與別名釋放優化保留；指定暖快取測點仍為每次 192 bytes。Catalog 現讓 ID／alias 共用解析資料，降低多別名索引成本；完全無 alias 時建立成本略增。映射更新與底層來源刷新分開，Store 批次交付只保留一份快照，診斷統計合併為一次掃描。並非所有 CPU／配置測點都更低，歷次量測與取捨見改善計畫 §5.17～5.19。
 
 可靠性、效能與本輪使用流程驗證見[改善計畫](unity-audio-service-improvement-plan.md)，相容性紀錄見 [CHANGELOG](CHANGELOG.md)。入門場景和範例會隨專案提供；本機測試及工具依既有規則留在受 Git 忽略的 Tests／Tools／work。

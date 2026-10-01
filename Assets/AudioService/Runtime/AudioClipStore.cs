@@ -55,38 +55,16 @@ namespace Controller.Audio
         private readonly IAudioClipProvider provider;
         private readonly AudioCallbackQueue callbacks;
         private bool disposed;
-        public int CachedCount
+        public void GetCounts(out int cached, out int users, out int loading)
         {
-            get
+            cached = users = loading = 0;
+            foreach (var entry in entries.Values)
             {
-                int n = 0;
-                foreach (var e in entries.Values)
-                    if (e.Lease?.Clip != null)
-                        n++;
-                return n;
-            }
-        }
-
-        public int UserCount
-        {
-            get
-            {
-                int n = 0;
-                foreach (var e in entries.Values)
-                    n += e.Users;
-                return n;
-            }
-        }
-
-        public int LoadingCount
-        {
-            get
-            {
-                int n = 0;
-                foreach (var e in entries.Values)
-                    if (e.Loading)
-                        n++;
-                return n;
+                if (entry.Lease?.Clip != null)
+                    cached++;
+                users += entry.Users;
+                if (entry.Loading)
+                    loading++;
             }
         }
 
@@ -222,30 +200,26 @@ namespace Controller.Audio
 
         private void Deliver(Entry entry)
         {
-            var waiting = entry.Waiters.ToArray();
-            entry.Waiters.Clear();
             // Reserve all delivery leases before invoking callbacks. A reentrant
             // ReleaseUnused/Stop from the first waiter cannot invalidate the rest.
-            var deliveries = new List<(Action<AudioClipLease> callback, AudioClipLease lease)>();
-            foreach (var waiter in waiting)
+            var deliveries = new (Action<AudioClipLease> callback, AudioClipLease lease)[entry.Waiters.Count];
+            for (int i = 0; i < entry.Waiters.Count; i++)
             {
+                var waiter = entry.Waiters[i];
                 var callback = waiter.Callback;
                 waiter.Callback = null;
                 if (callback == null)
                     continue;
                 AudioClipLease lease = null;
                 if (!disposed && entry.Lease?.Clip != null)
-                {
                     lease = AcquireUser(entry);
-                }
-
-                deliveries.Add((callback, lease));
+                deliveries[i] = (callback, lease);
             }
 
+            entry.Waiters.Clear();
             foreach (var delivery in deliveries)
-            {
-                AudioCallbacks.Deliver(delivery.callback, delivery.lease);
-            }
+                if (delivery.callback != null)
+                    AudioCallbacks.Deliver(delivery.callback, delivery.lease);
         }
 
         private void Cleanup(Entry entry)

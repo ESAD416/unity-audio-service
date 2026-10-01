@@ -2,9 +2,9 @@
 
 文件日期：2026-10-01
 
-文件版本：1.23
+文件版本：1.24
 
-狀態：完成六項架構收斂與技術債重構（見 5.18）；285 項 PlayMode、24 項 Editor／Reload、209 項 macOS Player 選定測試於無圖形／批次 Metal 模式各通過。未安裝 Addressables 的獨立核心亦已建置與播放驗證；UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成架構收斂後的 Catalog／素材交付精簡（見 5.19）；301 項 PlayMode、25 項 Editor／Reload、228 項 macOS Player 選定測試於無圖形／批次 Metal 模式各通過。未安裝 Addressables 的獨立核心亦已重新建置與播放驗證；UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1013,6 +1013,63 @@ macOS Player 選定測試在無圖形與批次 Metal 模式各 **119／119** 通
 
 本輪沒有改素材匯入設定、Mixer、套件版本或正式 ProjectSettings。仍保留需實際需求再處理的工作：UPM 宿主／範例資產分離、授權／CI、代表性遊戲的記憶體預算與效能驗收；不為假設需求加入 LRU、3D 或 DSP。少數引擎／來源數值測試仍有刻意保留的白箱入口，不宣稱已消除全部技術債。視窗畫面、人工操作／聽感、新使用者研究、其他 Unity 版本／平台及 IL2CPP 尚未驗證。
 
+### 5.19 Catalog 與素材交付精簡
+
+記錄日期：2026-10-01。依使用者核准的後續建議，先保存 §5.18 完成後的未提交工作，再修改四個 Runtime 檔案；基準不是 HEAD 的舊架構。沒有抽離 PrepareClip、增加快取政策或擴充播放 API，也沒有覆蓋前輪證據。
+
+**實作與行為邊界**
+
+- Catalog 以一份 ResolvedAudioClip 陣列保存每筆解析資料，分類＋ID／alias 字典只保存位置；兩者放在同一個私有快照，完整建立後才發布。保留第一筆衝突優先、無效 ID 的 alias 不改選後筆、大小寫、來源 key 的 null／空字串語意，以及編輯資料深複製。
+- AudioCatalog 的 ReplaceEntries、Catalog 指派及 Inspector／反序列化修訂，只取消服務舊待播放／預載／準備需求，重建服務素材快取及群組保留；不刷新 Provider 底層定位，也不取消外部直接向 Provider 發出的請求。取消回呼能使用新映射，已播放的舊 lease 保持有效。**更新 Addressables catalog 或相同 key 的底層內容後，仍須 RefreshClipProvider／Provider Changed**，不能用 ReplaceEntries 代替。
+- Store 以一個固定大小交付快照取代 Waiters.ToArray 加上 deliveries List；回呼前仍先取得所有有效接收者的 lease。第一個回呼釋放群組、ReleaseUnused、Dispose 或拋錯，不影響後續已保留的 lease；批次保留後的取消也不撤回已承諾交付。
+- 診斷合併 cached／users／loading 三次巡訪為一次，不增加需持續同步的計數欄位。StopAt 只有 Stop 一個呼叫者，直接合併，保留 StopPlayback 的非零淡出目標與既有停止語意。
+- 未改動播放接納、handle、取消世代、mutation queue、暫停原因及 Provider 的 lease 契約；PrepareClip 仍留在原引擎，避免混入下一個責任拆分。
+
+**同機量測**
+
+Unity 6000.6.3f1／Apple M4，使用相同 fixture 比較 `consolidation-baseline` 與 `consolidation-verified`；暖身後七次中位數，native 配置探針以 4,096 bytes 校驗，所有 capture 的無效 metadata 為零。CPU 含探針與 Editor 干擾，不代表 Player／DSP 或整體遊戲幀率。
+
+Catalog 矩陣涵蓋 10／100／1,000 筆、每筆 0／1／8 alias；下表選列 1,000 筆，**CPU 為重建 100 次總和，bytes 為單次重建配置量**。這是索引建置，不含 authoring／字串建立或 ReplaceEntries 的深複製。
+
+| 每筆 alias 數 | 重建 CPU，前 → 後 | 單次配置 bytes，前 → 後 |
+| --- | --- | --- |
+| 0 | 6.9558 → 8.9021 ms | 75,148 → 79,916 |
+| 1 | 15.6345 → 14.0607 ms | 158,788 → 124,196 |
+| 8 | 66.1054 → 42.3697 ms | 687,148 → 403,916 |
+
+- 一個／八個 alias 的建置配置分別減少約 21.8%／41.2%；無 alias 則增加 4,768 bytes（約 6.3%），且本次重建 CPU 較慢。每次配置事件由 3 → 5，包含新增的快照與解析陣列；不為零 alias 另加第二套索引策略。
+- 包含深複製的 ReplaceEntries，1,000 筆各八個 alias、100 次總量：94.1314 → 67.1202 ms，84,718,000 → 56,394,800 bytes。相同資料的 10,000 次末筆 alias 查詢：0.8389 → 0.7750 ms，兩者皆無配置；沒有以查詢微小差距宣稱普遍加速。
+- 32 份各 1,000 筆、一個 alias 的索引增量堆觀察：5,242,880 → 4,194,304 bytes，約每份 160 → 128 KiB。GC.GetTotalMemory 的整體 Editor 差額仍有雜訊，不是精確物件大小；不含 authoring 副本、字串、native 素材或音訊資料。完整樣本與範圍保留在摘要。
+
+| 其他測點 | CPU，前 → 後 | 配置 bytes，前 → 後 |
+| --- | --- | --- |
+| 1 個有效等待者的完成交付 | 0.0007 → 0.0003 ms | 368 → 240 |
+| 256 個有效等待者共用一次載入的完成交付 | 0.0806 → 0.0551 ms | 59,624 → 53,280 |
+| 1,000 個預載項目的 Diagnostics 讀取 1,000 次 | 23.8185 → 10.6148 ms | 0 → 0 |
+| 256 次暖快取 ID 播放 | 0.3800 → 0.3970 ms | 49,152 → 49,152 |
+| 256 個聲音整批停止 | 0.1368 → 0.1427 ms | 0 → 0 |
+
+交付量測不含等待者、Provider lease 與測試回呼的建立，但包含 Store 使用者 lease、快照及回呼交付；仍有必要的 lease／閉包配置。矩陣另有 8／64 個等待者，皆為有效等待者；取消較多的批次保留原行為，未宣稱配置量同幅下降。診斷在無 active AudioSource 的預載場景量測，非每幀自動掃描。
+
+暖播放仍為 **192 bytes／2 事件**。1,800 批、每批八次替換、最多 64 聲音，總配置兩者皆 2,764,800 bytes；呼叫中位數 0.0363 → 0.0429 ms、p99 0.0519 → 0.0555 ms、最大值 0.0765 → 0.0641 ms，程序 Gen0 次數 9 → 6。部分 CPU 上升與執行批次波動均保留，不將未修改的暖播放或程序 GC 差異歸功於本次簡化。
+
+**驗證與證據**
+
+| 驗證 | 結果 |
+| --- | --- |
+| 同機基準量測 | 5／5；修改正式 Runtime 前執行 |
+| 聚焦回歸與量測 | 75／75 |
+| 完整 PlayMode | 301／301，含新增 13 項行為回歸與 3 項量測 |
+| 專案 Editor／Reload | 25／25，新增稀疏資料／大量 aliases 的解析快照測試 |
+| macOS Player | 無圖形／批次 Metal 各 228／228；兩版 content 與 Player 建置成功，含實際 HTTP catalog 更新 |
+| 無 Addressables 核心 | 獨立專案重建成功，adapter 未編譯、核心無相關引用，基本 Prefab 無 Missing Script；Player 啟動、播放、暫停／恢復、替換、釋放與縮池 smoke 通過 |
+
+以上無失敗／跳過，最終 C# 建置 log 未見編譯錯誤／警告。新增回歸包括外部 Provider 請求隔離、Catalog 指派／反序列化、準備／預載取消後重入、明確來源刷新、取消等待者、回呼例外、同 ID 失敗重試及混合計數。完整播放器驗證不等同人工聽感或視窗操作驗收。
+
+原始快照、三項新測點 CSV、摘要、查核工具、Player 與獨立核心 log 位於 `work/consolidation-followup-20261001/`；PlayMode／Editor XML 與 log 為 `work/stage-two-hardening/consolidation-*`。原有播放及堆量測保留在各自的 work 目錄，使用相同 label。重跑說明為 `Tools/AudioService/CONSOLIDATION.md`，Tests／Tools／work 繼續僅留本機。
+
+本輪正式模組只修改 AudioCatalog、AudioController、AudioClipStore、AudioPlaybackEngine 四檔，其他變更為五份既有文件；前輪未提交變更保留。57 個專案／套件／Addressables 設定及指定 URP 資產內容未變，腳本／Prefab／場景／GUID 未新增或移動。建置產生的四個未追蹤檔移入本輪 generated 目錄留存；`git diff --check` 通過。其他平台、Unity 版本、IL2CPP、人工操作／聽感、UPM 真實安裝仍未驗證，不宣稱已消除全部技術債。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1209,6 +1266,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成播放配置、增益更新與 Addressables 釋放三項效能優化的範圍、分批實作與量測／驗收規劃；規劃階段僅修改計畫文件（見 5.16）。
 - [x] 完成 §5.16 三批實作、前後量測與索引成本調整；275 項 PlayMode、24 項 Editor／Reload、159 項 macOS Player 無圖形／批次 Metal 各通過，收益與限制見 §5.17。
 - [x] 完成六項架構收斂、舊 API 遷移與可選 Addressables；285 項 PlayMode、24 項 Editor／Reload、209 項 macOS Player 兩模式及 Resources-only 獨立 Player 通過，取捨及界線見 §5.18。
+- [x] 完成 Catalog 共用解析資料、服務／來源刷新分離與單一交付快照；301 項 PlayMode、25 項 Editor、Player 兩模式各 228 項及 Resources-only 獨立驗證通過，含無 alias 的成本取捨，見 §5.19。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1251,3 +1309,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.21 | 2026-10-01 | 完成三項核心效能優化，新增 §5.17 記錄同機前後量測、索引建立／保留成本與限制；完整 PlayMode 275、Editor／Reload 24、macOS Player 無圖形／Metal 各 159 項通過；基本 API 不變，測試與工具僅留本機 |
 | 1.22 | 2026-10-01 | 將「盡可能精簡優雅，並移除或優化可能造成技術債的程式碼」列為所有後續修改的固定準則，新增 §2.2 的責任邊界、相容性取捨與維護性檢查，並從 README 與開發流程連結；僅更新文件，尚未執行重構或新增執行期驗證 |
 | 1.23 | 2026-10-01 | 依核准完成播放／Provider／初始化／可選依賴／Catalog／範例測試六項重構；補破壞性 API 遷移、285 項 PlayMode、24 項 Editor、Player 兩模式各 209 項及未安裝 Addressables 的獨立建置，記錄效能與 Catalog 記憶體取捨，見 §5.18 |
+| 1.24 | 2026-10-01 | 精簡 Catalog 索引與素材交付、區分映射及來源刷新、合併診斷掃描與停止入口；301 項 PlayMode、25 項 Editor、Player 兩模式各 228 項及 Resources-only 驗證通過，保留無 alias 的額外成本與測點界線，見 §5.19 |

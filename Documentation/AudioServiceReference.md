@@ -45,9 +45,11 @@ catalog.ReplaceEntries(new AudioClipAddress("ui.result", AudioCategory.Sfx)
 AudioController.Instance.Catalog = catalog;
 ```
 
-Authoring 資料複製後才發布；`GetEntriesCopy()` 不可直接修改內部資料。`TryResolve` 回傳 readonly `ResolvedAudioClip`，含 Id、Category、ResourcesKey、AddressablesKey、MaxInstances。來源 key 為 null 時使用 ID；空字串明確停用該來源。
+Authoring 資料複製後才發布；`GetEntriesCopy()` 不可直接修改內部資料。`TryResolve` 回傳 readonly `ResolvedAudioClip`，含 Id、Category、ResourcesKey、AddressablesKey、MaxInstances。索引每筆只保存一份解析值，ID／aliases 共用該筆位置。來源 key 為 null 時使用 ID；空字串明確停用該來源。
 
-`ReplaceEntries` 先發布索引，再通知 Controller 刷新待載入請求與快取。Inspector／反序列化只標記索引版本，Controller 在主執行緒更新或下一次查詢時處理。已播放的素材由原 lease 保持有效。
+`ReplaceEntries` 先發布索引，再通知 Controller 取消舊待播放／預載／準備請求，更新服務自己的素材快取與群組保留。指派新的 Catalog 也走相同流程；Inspector／反序列化只標記索引版本，由 Controller 在主執行緒更新或下一次查詢時處理。已播放的素材由原 lease 保持有效，取消回呼內的新請求使用新映射。
+
+**AudioCatalog 映射變更不刷新 Provider 底層查找**，也不取消外部直接向 Provider 發出的取得請求。若底層來源內容改變，即使 key 相同，仍須明確呼叫 `RefreshClipProvider()` 或由 Provider 發送 Changed；不要用 ReplaceEntries 代替來源刷新。診斷中的素材數只統計目前的服務快取世代，舊播放的 lease 仍由原世代持有到結束。
 
 Fallback 支援兩種政策，僅依 Provider 契約選擇，不判斷 Resources／Addressables 型別：
 
@@ -130,4 +132,4 @@ Diagnostics 提供播放、等待、準備、快取與池數量。CreatedSources
 
 Editor Audio checks 提供唯讀場景 Listener、Mixer 與播放控制診斷，不載入素材、不自動修改狀態。Ready 不代表可聽見；實際音檔、Mixer 效果、OS／硬體輸出需另外驗收。
 
-目前環境、完整回歸與量測見 [改善計畫 §5.18](../unity-audio-service-improvement-plan.md#518-架構收斂與技術債重構)。本機 Tests／Tools／work 維持 Git 忽略，不隨正式模組發布。
+目前環境、完整回歸與量測見 [改善計畫 §5.19](../unity-audio-service-improvement-plan.md#519-catalog-與素材交付精簡)。本機 Tests／Tools／work 維持 Git 忽略，不隨正式模組發布。

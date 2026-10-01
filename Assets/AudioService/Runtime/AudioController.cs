@@ -48,7 +48,7 @@ namespace Controller.Audio
                 if (catalog == value)
                     return;
                 catalog = value;
-                RefreshClipProvider();
+                RefreshCatalog();
             }
         }
 
@@ -209,12 +209,15 @@ namespace Controller.Audio
             AttachProviderNotifications();
         }
 
-        public void RefreshClipProvider()
+        public void RefreshClipProvider() => RefreshClipState(true);
+        private void RefreshCatalog() => RefreshClipState(false);
+
+        private void RefreshClipState(bool refreshLookup)
         {
             failureLog = null;
             BindCatalog();
             if (Ready)
-                engine?.SetProvider(ClipProvider, true, true);
+                engine?.SetProvider(ClipProvider, force: true, refreshLookup: refreshLookup);
         }
 
         private void BindCatalog()
@@ -223,13 +226,13 @@ namespace Controller.Audio
             boundCatalog = catalog;
             catalogRevision = catalog != null ? catalog.Revision : 0;
             if (Ready && boundCatalog != null)
-                boundCatalog.Changed += RefreshClipProvider;
+                boundCatalog.Changed += RefreshCatalog;
         }
 
         private void UnbindCatalog()
         {
             if (boundCatalog != null)
-                boundCatalog.Changed -= RefreshClipProvider;
+                boundCatalog.Changed -= RefreshCatalog;
             boundCatalog = null;
         }
 
@@ -237,7 +240,7 @@ namespace Controller.Audio
         {
             // Inspector/serialization callbacks can run off-thread. Observe their revision here.
             if (boundCatalog != catalog || (catalog != null && catalogRevision != catalog.Revision))
-                RefreshClipProvider();
+                RefreshCatalog();
         }
 
         private void AttachProviderNotifications()

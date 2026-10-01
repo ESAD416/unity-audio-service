@@ -605,15 +605,14 @@ namespace Controller.Audio
                 Start(pending);
         }
 
-        public bool Stop(AudioHandle handle, float seconds) => StopAt(handle, seconds, 0f);
-        private bool StopAt(AudioHandle handle, float seconds, float target)
+        public bool Stop(AudioHandle handle, float seconds)
         {
             using var mutation = callbacks.Begin();
             SyncListenerPause();
             var p = Find(handle);
             if (p == null)
                 return false;
-            StopPlayback(p, seconds, target);
+            StopPlayback(p, seconds, 0f);
             return true;
         }
 
@@ -964,7 +963,8 @@ namespace Controller.Audio
                         playing++;
                 }
 
-                return new AudioDiagnostics(playing, paused, loading, pool.Count, emitters.Count, store.CachedCount, store.UserCount, store.LoadingCount, LastFailure, preparations.Count, gamePaused, backgroundPaused);
+                store.GetCounts(out int cached, out int users, out int pending);
+                return new AudioDiagnostics(playing, paused, loading, pool.Count, emitters.Count, cached, users, pending, LastFailure, preparations.Count, gamePaused, backgroundPaused);
             }
         }
 

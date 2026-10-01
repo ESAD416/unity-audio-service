@@ -55,6 +55,8 @@ Resources 舊 `GetClip`／`TryGetClip` 改為 `TryAcquireClip`，取得者保存
 
 ## Catalog
 
+後續精簡將映射更新與來源刷新分開：`ReplaceEntries`、Catalog 指派及 Inspector／反序列化變更只使服務的舊需求與快取失效，不再呼叫 Provider 的 `RefreshClipLookup`。更新 Addressables catalog 或相同 key 的底層內容後，仍需呼叫 `RefreshClipProvider()`；已發出的 lease 保持有效。
+
 `Entries` 公開陣列移除，使用 `GetEntriesCopy()` 取得編輯副本，再以 `ReplaceEntries(...)` 一次發布。輸入、aliases 及讀回副本都不共享內部可變資料；`TryResolve` 回傳不可變的 `ResolvedAudioClip` 值。
 
 ```csharp

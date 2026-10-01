@@ -44,10 +44,22 @@ namespace Controller.Audio
     [CreateAssetMenu(menuName = "Audio Service/Catalog")]
     public sealed class AudioCatalog : ScriptableObject, ISerializationCallbackReceiver
     {
+        private sealed class Lookup
+        {
+            public readonly ResolvedAudioClip[] Records;
+            public readonly Dictionary<(AudioCategory, string), int> Keys;
+
+            public Lookup(int records, int keys)
+            {
+                Records = new ResolvedAudioClip[records];
+                Keys = new Dictionary<(AudioCategory, string), int>(keys);
+            }
+        }
+
         [SerializeField, FormerlySerializedAs("Entries")]
         private AudioClipAddress[] entries = Array.Empty<AudioClipAddress>();
         [NonSerialized]
-        private Dictionary<(AudioCategory, string), ResolvedAudioClip> index;
+        private Lookup index;
         public event Action Changed;
         internal int Revision { get; private set; }
 
@@ -84,30 +96,37 @@ namespace Controller.Audio
 
         internal void RebuildIndex()
         {
-            int capacity = 0;
+            int count = 0, capacity = 0;
             if (entries != null)
                 foreach (var entry in entries)
                     if (entry != null)
+                    {
+                        count++;
                         capacity += 1 + (entry.Aliases?.Length ?? 0);
-            var next = new Dictionary<(AudioCategory, string), ResolvedAudioClip>(capacity);
+                    }
+            var next = new Lookup(count, capacity);
+            int row = 0;
             if (entries != null)
                 foreach (var entry in entries)
                 {
                     if (entry == null)
                         continue;
-                    Add(entry.Id, entry);
+                    next.Records[row] = new ResolvedAudioClip(entry.Id, entry.Category, entry.ResourcesKey, entry.AddressablesKey, entry.MaxInstances);
+                    Add(entry.Id, entry.Category, row);
                     if (entry.Aliases != null)
                         foreach (var alias in entry.Aliases)
-                            Add(alias, entry);
+                            Add(alias, entry.Category, row);
+                    row++;
                 }
 
+            // Publish records and alias indices together only after the snapshot is complete.
             index = next;
-            void Add(string key, AudioClipAddress entry)
+            void Add(string key, AudioCategory category, int record)
             {
                 // Keep the first match, including an alias on an entry with an invalid
                 // ID. Validation reports it; lookup must not silently choose another clip.
                 if (!string.IsNullOrWhiteSpace(key))
-                    next.TryAdd((entry.Category, key), new ResolvedAudioClip(entry.Id, entry.Category, entry.ResourcesKey, entry.AddressablesKey, entry.MaxInstances));
+                    next.Keys.TryAdd((category, key), record);
             }
         }
 
@@ -116,9 +135,16 @@ namespace Controller.Audio
             address = default;
             if (string.IsNullOrWhiteSpace(id.Value))
                 return false;
-            if (index == null)
+            var current = index;
+            if (current == null)
+            {
                 RebuildIndex();
-            return index.TryGetValue((category, id.Value), out address) && !string.IsNullOrWhiteSpace(address.Id);
+                current = index;
+            }
+            if (!current.Keys.TryGetValue((category, id.Value), out int row))
+                return false;
+            address = current.Records[row];
+            return !string.IsNullOrWhiteSpace(address.Id);
         }
 
         /// <summary>Check authoring data without loading assets or changing the catalog.
