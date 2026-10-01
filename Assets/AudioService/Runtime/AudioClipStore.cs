@@ -161,7 +161,7 @@ namespace Controller.Audio
                         Complete(entry, lease);
                     }
                     else
-                        provider.AcquireClip(address, result => Complete(entry, result));
+                        AcquireAsync(address, entry);
                 }
                 catch (Exception)
                 {
@@ -169,6 +169,15 @@ namespace Controller.Audio
                 }
             }
 
+            return waiter.Callback == null ? NoCancellation : CreateCancellation(entry, waiter);
+        }
+
+        // Keep async and cancellation captures off inline-completed requests.
+        private void AcquireAsync(ResolvedAudioClip address, Entry entry)
+            => provider.AcquireClip(address, result => Complete(entry, result));
+
+        private Action CreateCancellation(Entry entry, Waiter waiter)
+        {
             return () =>
             {
                 waiter.Callback = null;
@@ -200,9 +209,20 @@ namespace Controller.Audio
 
         private void Deliver(Entry entry)
         {
+            int count = 0;
+            foreach (var waiter in entry.Waiters)
+                if (waiter.Callback != null)
+                    count++;
+            if (count == 0)
+            {
+                entry.Waiters.Clear();
+                return;
+            }
+
             // Reserve all delivery leases before invoking callbacks. A reentrant
             // ReleaseUnused/Stop from the first waiter cannot invalidate the rest.
-            var deliveries = new (Action<AudioClipLease> callback, AudioClipLease lease)[entry.Waiters.Count];
+            var deliveries = new (Action<AudioClipLease> callback, AudioClipLease lease)[count];
+            int next = 0;
             for (int i = 0; i < entry.Waiters.Count; i++)
             {
                 var waiter = entry.Waiters[i];
@@ -213,13 +233,12 @@ namespace Controller.Audio
                 AudioClipLease lease = null;
                 if (!disposed && entry.Lease?.Clip != null)
                     lease = AcquireUser(entry);
-                deliveries[i] = (callback, lease);
+                deliveries[next++] = (callback, lease);
             }
 
             entry.Waiters.Clear();
             foreach (var delivery in deliveries)
-                if (delivery.callback != null)
-                    AudioCallbacks.Deliver(delivery.callback, delivery.lease);
+                AudioCallbacks.Deliver(delivery.callback, delivery.lease);
         }
 
         private void Cleanup(Entry entry)

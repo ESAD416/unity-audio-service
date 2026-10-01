@@ -20,8 +20,6 @@ namespace Controller.Audio.Editor
     {
         private static readonly string[] ChannelNames = { "Master", "BGM", "SFX", "Voice" };
         private static readonly string[] ChannelValues = { "Master", "Bgm", "Sfx", "Voice" };
-        private static readonly string[] MixerParameters = { "masterVolume", "bgmVolume", "soundVolume", "voiceVolume" };
-        private static readonly string[] MixerGroups = { "BGM", "Sound", "Voice" };
 
         public static IReadOnlyList<AudioSetupIssue> GetIssues(AudioController controller)
         {
@@ -83,12 +81,16 @@ namespace Controller.Audio.Editor
         private static void CheckMixer(AudioMixer mixer, List<AudioSetupIssue> issues)
         {
             if (mixer == null) return; // Mixer-free playback uses source gains.
-            foreach (string parameter in MixerParameters)
+            for (int i = 0; i < AudioMixerLayout.ChannelCount; i++)
+            {
+                string parameter = AudioMixerLayout.Parameter(i);
                 if (!mixer.GetFloat(parameter, out _))
                     issues.Add(new AudioSetupIssue($"Mixer is missing exposed parameter '{parameter}'. Expose that volume parameter, or use the supplied MasterMixer. The service uses source-volume fallback where needed.", MessageType.Warning, mixer));
+            }
             var groups = mixer.FindMatchingGroups(string.Empty);
-            foreach (string name in MixerGroups)
+            for (int i = 0; i < AudioMixerLayout.CategoryCount; i++)
             {
+                string name = AudioMixerLayout.Group(i);
                 bool found = false;
                 foreach (var group in groups) if (group.name == name) { found = true; break; }
                 if (!found)

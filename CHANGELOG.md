@@ -1,5 +1,13 @@
 # 變更紀錄
 
+## Unreleased - 通知、載入與準備責任精簡（2026-10-01）
+
+- Catalog.Changed、Fallback.Changed 與 handle.Completed 共用逐訂閱者例外隔離，包含晚訂閱的多播委派；維持通知快照與同步時序。lease 交付仍為單一所有權，VolumeChanged 的例外語意及高頻路徑不改。
+- Store 同步／inline 完成後不建立取消閉包，交付快照只容納有效等待者，全部取消則省略。Fallback 同步取得先於 async 請求狀態建立，保留世代檢查、重入、晚到素材釋放與一次完成；同步來源拋錯前已指派的 lease 也會釋放。
+- PrepareClip 狀態集中至內部 AudioPreparationQueue，與引擎共用原回呼佇列並每次接收當下 Store；Runtime／Editor 共用唯讀 AudioMixerLayout。公開 API、Prefab、序列化欄位及設定不變。
+- 同機量測：Fallback 同步命中每次 448 → 192 bytes；256 等待者全部取消後交付 4,128 → 0 bytes。冷同步 Store 256 次 208,980 → 165,972 bytes；部分 CPU 測點上升，詳見改善計畫 §5.20，不宣稱全面加速。
+- PlayMode 326／326、Editor／Reload 26／26、macOS Player 無圖形／批次 Metal 各 250／250，以及 Resources-only 獨立建置／播放／準備 smoke 通過。初次新增測試 GUID 錯誤經清單核對修正，最終已確認新增 22 項行為案例確實執行。測試／工具只留本機；其他平台、IL2CPP、人工操作與聽感未驗收。
+
 ## Unreleased - Catalog 與素材交付精簡（2026-10-01）
 
 - Catalog 每筆保存一份不可變解析資料，ID／alias 索引只保存位置，完整建立後一次發布；保留大小寫、首筆衝突優先、無效 ID 及 null／空來源 key 語意。

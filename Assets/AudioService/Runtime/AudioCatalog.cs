@@ -69,7 +69,7 @@ namespace Controller.Audio
             entries = Copy(value);
             RebuildIndex();
             Revision++;
-            AudioCallbacks.Invoke(Changed);
+            AudioCallbacks.Broadcast(Changed);
         }
 
         private static AudioClipAddress[] Copy(AudioClipAddress[] source)

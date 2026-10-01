@@ -10,8 +10,10 @@
 | `AudioController` | 唯一宿主；序列化依賴、啟停與 Unity 通知 |
 | `AudioPlaybackEngine` | handle、並發、替換槽、動態聲源池、暫停與淡變 |
 | `AudioClipStore` | 等待者、播放使用者、普通快取與預載群組的持有責任 |
+| `AudioPreparationQueue` | 等待音訊資料 Loaded、一次完成與群組取消；與引擎共用回呼佇列 |
 | `IAudioClipProvider` | 底層素材查詢、取得與 lease 釋放 |
 | `AudioMixerState` | Mixer 路由、音量備援與設定同步；不是額外場景元件 |
+| `AudioMixerLayout` | Runtime 與 Editor 共用的唯讀 Mixer 參數／群組名稱；不是公開 API |
 | `AudioCatalog` | 編輯資料與不可變執行期解析結果 |
 
 `Runtime/Controller.Audio.asmdef` 不引用 Addressables。`Integrations/Addressables/Controller.Audio.Addressables.asmdef` 依賴核心及 Addressables，依套件存在與否啟用。Editor 與 Samples 只引用核心；UPM 套件 manifest／完整宿主分離尚未完成。
@@ -29,6 +31,8 @@
 - 終態、並發名額與聲源清理先提交，再派送 Provider 釋放與 Completed。回呼重新播放或關閉服務時看到完整狀態；例外隔離，晚訂閱仍收到一次保留結果。
 - 結束後 handle 不能控制重用聲源，且不保留播放資料或素材。直接傳入的 AudioClip 由外部擁有，服務不卸載它。
 - 找不到素材、空 ID／null clip、無效分類及並發拒絕，不會先停止現有替換槽。
+
+`AudioHandle.Completed`、`AudioCatalog.Changed` 與 `FallbackAudioClipProvider.Changed` 依通知開始時的訂閱快照逐一呼叫；一位訂閱者拋例外會記錄，但不阻止後續訂閱者。Completed 的晚訂閱也遵守此規則。通知中增減訂閱不改變該次快照，巢狀通知使用新的快照；不額外延遲原本同步的 Changed。
 
 ## Catalog 與來源
 
@@ -58,6 +62,8 @@ Fallback 支援兩種政策，僅依 Provider 契約選擇，不判斷 Resources
 
 Policy、Configure 或來源 Changed 會取消舊需求並刷新。主／備來源必須明確配置，禁止循環依賴。
 
+PreferAvailable 同步取得成功時不建立待取消的 async 請求；仍檢查取得途中是否發生重設、停用或來源變更。失效結果會釋放並回呼 null 一次，不繼續舊世代的載入。PrimaryThenBackup 的主來源優先政策不變。
+
 Addressables catalog 更新成功後呼叫 `controller.RefreshClipProvider()`。它取消舊查找、清除位置與 alias 索引，並保留已發出 lease。Fallback 向支援刷新的子來源轉送；RefreshClipLookup 不得再次發送 Changed。新舊 AssetBundle 並存仍需專案自己的更新策略；服務不修改建置設定。
 
 ## Provider 契約
@@ -73,6 +79,8 @@ Addressables catalog 更新成功後呼叫 `controller.RefreshClipProvider()`。
 沒有同步能力仍實作 TryAcquireClip 並回傳 false。每份 lease 的 Dispose 冪等；Provider 銷毀或刷新後，已發出且未釋放的 lease 仍有效。Provider 實作負責實際 native 資產操作，不能以「目前沒在快取表」推論資產已無使用者。
 
 可選 `IAudioClipProviderChanges` 提供 Changed；`IAudioClipProviderRefresh` 提供刷新；`IAudioClipProviderDiagnostics.DescribeLookup` 提供失敗時的來源描述。核心不依具體型別分支，也不再代跑舊 coroutine。
+
+素材 lease 的完成回呼是單一所有權交付，不是通知廣播。接收者缺省或拋例外時釋放該 lease；不要把同一 lease 交給多個獨立擁有者。Store 只為仍有效的等待者保留交付快照，全部取消時不配置快照；一旦整批 lease 已保留，回呼中的取消不撤回其他已承諾交付。
 
 Resources 只移除自身引用，不強制 UnloadAsset；外部所有者可能仍使用同一 clip。Addressables 依 resource location 合併 address／GUID 的 native operation，最後一份 lease／待派送持有離開後才 release。alias 索引不是額外的快取持有。
 
@@ -96,6 +104,8 @@ Preload 保證取得 AudioClip 資產；PrepareClip 另呼叫需要的 LoadAudio
 - ReleaseGroup 取消該群組的等待／準備並移除保留，不停止播放，也不動其他群組／普通快取。回呼新建的需求不屬於舊批次。
 - ReleaseUnusedClips 清除普通快取保留；播放使用者或群組仍存在時不釋放。普通播放也會建立快取保留。
 - Provider 更換／刷新、Shutdown 與音訊重設使尚未完成的 PrepareClip 回呼 false 一次。成功準備由群組繼續持有，直到釋放。
+
+PrepareClip 的內部狀態集中於 AudioPreparationQueue，由引擎傳入當下 Store；不新增場景元件、不自行保留舊 Store。公開入口、每幀檢查、回呼時機與 Preload 的較弱保證皆保持。
 - 不主動 UnloadAudioData；直接 clip 的生命週期由外部負責。尚無 LRU 或自動記憶體預算淘汰。
 
 完整換場、取消與 BGM 擁有者範例見 [SceneAudio](SceneAudio.md)。長 BGM 的 Streaming／背景載入設定可透過 `Tools > Audio Service > Audio Imports` 明確檢查或套用；工具不會在匯入時自動修改檔案。
@@ -122,6 +132,8 @@ Mixer 的群組為 BGM／Sound／Voice，exposed parameters 為 masterVolume／b
 
 BindSettings 連接 IAudioSettingsHandler。ApplyVolume(..., persist:false) 暫時改值；之後同值的保存操作仍會同步 handler，VolumeChanged 僅在有效值改變時通知。PlayerPrefs 設定保留 debounce 儲存、背景／停用 flush、實際 keys 的 ResetSettings、輸入正規化與事件重入保障。
 
+VolumeChanged 保留原本同步委派的例外傳遞語意，沒有套用上述 Changed／Completed 的逐訂閱者隔離；設定同步旗標仍在 finally 還原。本輪不改其行為，也不在高頻音量更新加入訂閱快照配置。
+
 ## 啟停與診斷
 
 Controller 的 Awake、重新啟用與 Reload 重接都走 Initialize。依賴由同一宿主管理，沒有全域 Provider 註冊或 Bootstrap 場景搜尋。Shutdown 先標記不可用，再取消／停止、退訂與釋放；其回呼期間不能重新初始化。重新啟用不復活舊 handle。
@@ -132,4 +144,4 @@ Diagnostics 提供播放、等待、準備、快取與池數量。CreatedSources
 
 Editor Audio checks 提供唯讀場景 Listener、Mixer 與播放控制診斷，不載入素材、不自動修改狀態。Ready 不代表可聽見；實際音檔、Mixer 效果、OS／硬體輸出需另外驗收。
 
-目前環境、完整回歸與量測見 [改善計畫 §5.19](../unity-audio-service-improvement-plan.md#519-catalog-與素材交付精簡)。本機 Tests／Tools／work 維持 Git 忽略，不隨正式模組發布。
+目前環境、完整回歸與量測見 [改善計畫 §5.20](../unity-audio-service-improvement-plan.md#520-通知載入與準備責任精簡)。本機 Tests／Tools／work 維持 Git 忽略，不隨正式模組發布。

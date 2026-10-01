@@ -107,7 +107,7 @@ namespace Controller.Audio
                 if (value == null)
                     return;
                 if (IsFinished)
-                    Invoke(value);
+                    AudioCallbacks.Broadcast(value, this);
                 else
                     completed += value;
             }
@@ -141,11 +141,7 @@ namespace Controller.Audio
         private void DispatchCompleted(AudioPlaybackEngine owner, Action<AudioHandle> subscribers)
         {
             // Keep the notification closure out of the common no-subscriber path.
-            void Notify()
-            {
-                foreach (Action<AudioHandle> callback in subscribers.GetInvocationList())
-                    Invoke(callback);
-            }
+            void Notify() => AudioCallbacks.Broadcast(subscribers, this);
 
             if (owner != null)
                 owner.NotifyCompleted(Notify);
@@ -153,17 +149,6 @@ namespace Controller.Audio
                 Notify();
         }
 
-        private void Invoke(Action<AudioHandle> callback)
-        {
-            try
-            {
-                callback(this);
-            }
-            catch (Exception error)
-            {
-                Debug.LogException(error);
-            }
-        }
     }
 
     public static class AudioValues

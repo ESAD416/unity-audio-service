@@ -2,6 +2,8 @@
 
 本輪依使用者核准移除舊相容模型，屬於破壞性變更。`AudioService` 的 BGM 替換、對話替換、獨立音效及 handle 契約維持；舊 Controller 包裝與 Provider 需遷移。以下不提供長期相容層。
 
+後續 §5.20 的通知／載入／準備整理不再移除 API，也不改 Prefab 或序列化欄位。唯一通知行為補強是 `AudioCatalog.Changed`、`FallbackAudioClipProvider.Changed` 及 Completed 晚訂閱的多播委派：某個訂閱者拋錯仍會記錄，後續訂閱者照常收到通知。不要依賴拋例外中斷這些事件；lease 交付與 VolumeChanged 保留各自原有契約。
+
 ## 播放與控制
 
 | 舊入口／行為 | 新入口／處理方式 |

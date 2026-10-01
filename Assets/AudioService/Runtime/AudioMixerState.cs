@@ -6,13 +6,6 @@ namespace Controller.Audio
 {
     internal sealed class AudioMixerState
     {
-        private static readonly string[] Parameters =
-        {
-            "masterVolume",
-            "bgmVolume",
-            "soundVolume",
-            "voiceVolume"
-        };
         private readonly float[] volumes =
         {
             1,
@@ -20,8 +13,8 @@ namespace Controller.Audio
             1,
             1
         };
-        private readonly bool[] parameters = new bool[4];
-        private readonly AudioMixerGroup[] groups = new AudioMixerGroup[3];
+        private readonly bool[] parameters = new bool[AudioMixerLayout.ChannelCount];
+        private readonly AudioMixerGroup[] groups = new AudioMixerGroup[AudioMixerLayout.CategoryCount];
         private readonly Action<int> refreshGains;
         private readonly Action<AudioChannel, float> volumeChanged;
         private AudioMixer mixer;
@@ -45,14 +38,9 @@ namespace Controller.Audio
             if (mixer == null)
                 return;
             foreach (var group in mixer.FindMatchingGroups(string.Empty))
-            {
-                if (group.name == "BGM")
-                    groups[0] = group;
-                else if (group.name == "Sound")
-                    groups[1] = group;
-                else if (group.name == "Voice")
-                    groups[2] = group;
-            }
+                for (int i = 0; i < groups.Length; i++)
+                    if (group.name == AudioMixerLayout.Group(i))
+                        groups[i] = group;
         }
 
         public void BindSettings(IAudioSettingsHandler handler, bool active, bool applyStored)
@@ -137,7 +125,7 @@ namespace Controller.Audio
             }
         }
 
-        private void ApplyParameter(int index) => parameters[index] = mixer != null && mixer.SetFloat(Parameters[index], AudioValues.Decibels(volumes[index]));
+        private void ApplyParameter(int index) => parameters[index] = mixer != null && mixer.SetFloat(AudioMixerLayout.Parameter(index), AudioValues.Decibels(volumes[index]));
         public void Apply()
         {
             Applied = true;
@@ -151,9 +139,9 @@ namespace Controller.Audio
             LastIssue = null;
             if (mixer == null)
                 return true;
-            for (int i = 0; i < Parameters.Length; i++)
-                if (!mixer.GetFloat(Parameters[i], out _))
-                    LastIssue = "Missing exposed parameter: " + Parameters[i];
+            for (int i = 0; i < parameters.Length; i++)
+                if (!mixer.GetFloat(AudioMixerLayout.Parameter(i), out _))
+                    LastIssue = "Missing exposed parameter: " + AudioMixerLayout.Parameter(i);
             if (groups[0] == null || groups[1] == null || groups[2] == null)
                 LastIssue = "Missing BGM, Sound or Voice mixer group";
             return LastIssue == null;

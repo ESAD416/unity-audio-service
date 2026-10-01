@@ -66,16 +66,7 @@ namespace Controller.Audio
             public Playback Current, Pending;
         }
 
-        private sealed class Preparation
-        {
-            public string Group;
-            public Action<bool> Completed;
-            public AudioClipLease Lease;
-            public Action CancelLoad;
-            public bool Finished;
-        }
-
-        private readonly List<Preparation> preparations = new();
+        private readonly AudioPreparationQueue preparations;
         private readonly AudioCallbackQueue callbacks = new();
         internal void NotifyCompleted(Action callback) => callbacks.Enqueue(callback);
         internal AudioCallbackQueue.Scope BeginMutation() => callbacks.Begin();
@@ -128,6 +119,7 @@ namespace Controller.Audio
         {
             this.host = host;
             listenerPaused = AudioListener.pause;
+            preparations = new AudioPreparationQueue(callbacks);
             SetProvider(provider);
         }
 
@@ -146,8 +138,7 @@ namespace Controller.Audio
             foreach (var playback in previousRequests)
                 if (playback.Handle.State == AudioPlaybackState.Loading)
                     Finish(playback, AudioCompletion.Cancelled);
-            foreach (var preparation in preparations.ToArray())
-                FinishPreparation(preparation, false);
+            preparations.CancelAll();
             previousStore?.Dispose();
             if (refreshLookup && AudioValues.Alive(next) && next is IAudioClipProviderRefresh refreshable)
                 AudioCallbacks.Invoke(refreshable.RefreshClipLookup);
@@ -780,8 +771,7 @@ namespace Controller.Audio
             if (disposed)
                 return;
             SyncListenerPause();
-            for (int i = preparations.Count - 1; i >= 0; i--)
-                CheckPreparation(preparations[i]);
+            preparations.Tick();
             int changedCategories = 0;
             for (int i = 0; i < 4; i++)
                 if (busTweens[i].Active)
@@ -849,84 +839,14 @@ namespace Controller.Audio
                 return;
             }
 
-            var preparation = new Preparation
-            {
-                Group = group,
-                Completed = completed
-            };
-            preparations.Add(preparation);
-            var cancel = store.Request(address, true, lease =>
-            {
-                using var delivery = callbacks.Begin();
-                if (preparation.Finished)
-                {
-                    AudioCallbacks.Dispose(lease);
-                    return;
-                }
-
-                preparation.CancelLoad = null;
-                preparation.Lease = lease;
-                if (lease?.Clip == null)
-                {
-                    FinishPreparation(preparation, false);
-                    return;
-                }
-
-                try
-                {
-                    if (lease.Clip.loadState == AudioDataLoadState.Unloaded && !lease.Clip.LoadAudioData())
-                    {
-                        FinishPreparation(preparation, false);
-                        return;
-                    }
-
-                    CheckPreparation(preparation);
-                }
-                catch (Exception)
-                {
-                    FinishPreparation(preparation, false);
-                }
-            }, group);
-            if (!preparation.Finished && preparation.Lease == null)
-                preparation.CancelLoad = cancel;
-        }
-
-        private void CheckPreparation(Preparation preparation)
-        {
-            if (preparation.Finished || preparation.Lease == null)
-                return;
-            var clip = preparation.Lease.Clip;
-            if (clip == null || clip.loadState == AudioDataLoadState.Failed)
-                FinishPreparation(preparation, false);
-            else if (clip.loadState == AudioDataLoadState.Loaded)
-                FinishPreparation(preparation, true);
-        }
-
-        private void FinishPreparation(Preparation preparation, bool success)
-        {
-            if (preparation.Finished)
-                return;
-            preparation.Finished = true;
-            preparations.Remove(preparation);
-            var cancel = preparation.CancelLoad;
-            preparation.CancelLoad = null;
-            var lease = preparation.Lease;
-            preparation.Lease = null;
-            var completed = preparation.Completed;
-            preparation.Completed = null;
-            if (completed != null)
-                callbacks.Enqueue(() => AudioCallbacks.Invoke(completed, success));
-            AudioCallbacks.Invoke(cancel);
-            AudioCallbacks.Dispose(lease);
+            preparations.Prepare(store, address, group, completed);
         }
 
         public bool TryGetCached(ResolvedAudioClip address, out AudioClip clip) => store.TryGetCached(address, out clip);
         public void ReleaseGroup(string group)
         {
             using var mutation = callbacks.Begin();
-            foreach (var preparation in preparations.ToArray())
-                if (preparation.Group == group)
-                    FinishPreparation(preparation, false);
+            preparations.CancelGroup(group);
             store.ReleaseGroup(group);
         }
 
@@ -976,8 +896,7 @@ namespace Controller.Audio
             disposed = true;
             foreach (var p in active.ToArray())
                 Finish(p, p.Handle.State == AudioPlaybackState.Loading ? AudioCompletion.Cancelled : AudioCompletion.Stopped);
-            foreach (var preparation in preparations.ToArray())
-                FinishPreparation(preparation, false);
+            preparations.CancelAll();
             store.Dispose();
             externalIds = null;
             foreach (var e in emitters)

@@ -88,7 +88,7 @@ namespace Controller.Audio
         {
             using var mutation = callbacks.Begin();
             CancelPending();
-            AudioCallbacks.Invoke(Changed);
+            AudioCallbacks.Broadcast(Changed);
         }
 
         public bool TryGetCachedClip(ResolvedAudioClip address, out AudioClip clip)
@@ -122,9 +122,47 @@ namespace Controller.Audio
         {
             using var mutation = callbacks.Begin();
             int version = generation;
+            if (policy == AudioFallbackPolicy.PreferAvailable)
+            {
+                AudioClipLease immediate = null;
+                bool acquired;
+                try
+                {
+                    acquired = TryAcquireClip(address, out immediate);
+                }
+                catch (Exception)
+                {
+                    callbacks.Release(immediate);
+                    Deliver(completed, null);
+                    return;
+                }
+
+                // A synchronous provider can reconfigure or disable this owner.
+                if (!IsCurrent(version))
+                {
+                    callbacks.Release(immediate);
+                    Deliver(completed, null);
+                    return;
+                }
+                if (acquired)
+                {
+                    Deliver(completed, immediate);
+                    return;
+                }
+            }
+
+            AcquirePending(address, completed, version);
+        }
+
+        private bool IsCurrent(int version) => this != null && generation == version;
+        private void Deliver(Action<AudioClipLease> completed, AudioClipLease lease)
+            => callbacks.Enqueue(() => AudioCallbacks.Deliver(completed, lease));
+
+        private void AcquirePending(ResolvedAudioClip address, Action<AudioClipLease> completed, int version)
+        {
             bool finished = false;
             Action cancel = null;
-            bool Valid() => !finished && this != null && generation == version;
+            bool Valid() => !finished && IsCurrent(version);
             void Finish(AudioClipLease lease)
             {
                 using var delivery = callbacks.Begin();
@@ -143,19 +181,13 @@ namespace Controller.Audio
                     lease = null;
                 }
 
-                callbacks.Enqueue(() => AudioCallbacks.Deliver(completed, lease));
+                Deliver(completed, lease);
             }
 
             cancel = () => Finish(null);
             cancellations.Add(cancel);
             try
             {
-                if (policy == AudioFallbackPolicy.PreferAvailable && TryAcquireClip(address, out var immediate))
-                {
-                    Finish(immediate);
-                    return;
-                }
-
                 var primary = Primary;
                 var secondary = Secondary;
                 Acquire(primary, address, lease =>

@@ -6,6 +6,19 @@ namespace Controller.Audio
 {
     internal static class AudioCallbacks
     {
+        // Broadcast notifications only. A lease delivery still has one owner.
+        public static void Broadcast(Action subscribers)
+        {
+            if (subscribers == null) return;
+            foreach (Action subscriber in subscribers.GetInvocationList())
+                Invoke(subscriber);
+        }
+        public static void Broadcast<T>(Action<T> subscribers, T value)
+        {
+            if (subscribers == null) return;
+            foreach (Action<T> subscriber in subscribers.GetInvocationList())
+                Invoke(subscriber, value);
+        }
         public static void Invoke(Action callback)
         {
             try { callback?.Invoke(); }
