@@ -377,9 +377,11 @@ namespace Controller.Audio
                 if (mixerApplied) ApplyMixerParameter(index);
                 // A working mixer applies player volume itself. Refresh sources only
                 // when their fallback gain changes, including a failed mixer write.
-                if (bgmGain != SourceSettingsGain(AudioCategory.Bgm) ||
-                    sfxGain != SourceSettingsGain(AudioCategory.Sfx) ||
-                    voiceGain != SourceSettingsGain(AudioCategory.Voice)) engine?.RefreshGains();
+                int changedCategories = 0;
+                if (bgmGain != SourceSettingsGain(AudioCategory.Bgm)) changedCategories |= 1;
+                if (sfxGain != SourceSettingsGain(AudioCategory.Sfx)) changedCategories |= 2;
+                if (voiceGain != SourceSettingsGain(AudioCategory.Voice)) changedCategories |= 4;
+                if (changedCategories != 0) engine?.RefreshGains(changedCategories);
             }
             // An unchanged effective volume may still need to persist a temporary
             // ApplyVolume(..., persist: false) value or synchronize a newly bound handler.

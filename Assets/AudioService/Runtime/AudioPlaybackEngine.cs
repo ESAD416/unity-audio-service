@@ -417,7 +417,8 @@ namespace Controller.Audio
         public void SetMuted(AudioChannel channel, bool value)
         {
             if (muted[(int)channel] == value) return;
-            muted[(int)channel] = value; RefreshGains();
+            muted[(int)channel] = value;
+            RefreshGains(ChannelMask(channel));
         }
         public AudioChannelDiagnostics GetChannelDiagnostics(AudioChannel channel, float volume)
             => new AudioChannelDiagnostics(volume, busGains[(int)channel], muted[(int)channel]);
@@ -445,7 +446,7 @@ namespace Controller.Audio
             }
             else if (seconds <= 0) busGains[index] = target;
             else busTweens[index] = new Tween { Start = busGains[index], Target = target, Duration = seconds };
-            RefreshGains();
+            RefreshGains(ChannelMask(channel));
         }
         public void FadeLegacy(int bank, float target, float seconds, bool stopAfter)
         {
@@ -468,17 +469,24 @@ namespace Controller.Audio
             if (!stopAfter)
             {
                 bankGains[bank] *= reserved[bank].Envelope;
-                foreach (var e in emitters) if (e.Bank == bank) e.Envelope = 1;
+                foreach (var e in updating) if (e.Bank == bank) e.Envelope = 1;
+                reserved[bank].Envelope = 1;
                 if (seconds <= 0) bankGains[bank] = target;
                 else bankTweens[bank] = new Tween { Start = bankGains[bank], Target = target, Duration = seconds };
             }
-            RefreshGains();
+            RefreshGains(0, 1 << bank);
         }
+        private static int ChannelMask(AudioChannel channel) => channel == AudioChannel.Master ? 7 : 1 << ((int)channel - 1);
+        private static AudioCategory CategoryOf(Emitter emitter) => emitter.Current?.Handle.Category
+            ?? (emitter.Bank == 0 ? AudioCategory.Bgm : emitter.Bank == 1 || emitter.Bank == 2 ? AudioCategory.Sfx : AudioCategory.Voice);
+        private static bool NeedsGain(Emitter emitter, int categories, int banks)
+            => categories == 7 || (categories != 0 && (categories & (1 << (int)CategoryOf(emitter))) != 0)
+                || (banks != 0 && emitter.Bank >= 0 && (banks & (1 << emitter.Bank)) != 0);
         private void ApplyGain(Emitter emitter)
         {
             if (emitter.Source == null) return;
             var p = emitter.Current;
-            var category = p?.Handle.Category ?? (emitter.Bank == 0 ? AudioCategory.Bgm : emitter.Bank == 1 || emitter.Bank == 2 ? AudioCategory.Sfx : AudioCategory.Voice);
+            var category = CategoryOf(emitter);
             int bus = (int)category + 1;
             float gain = busGains[0] * busGains[bus] * (muted[0] || muted[bus] ? 0 : 1);
             if (emitter.Bank >= 0) gain *= bankGains[emitter.Bank];
@@ -495,18 +503,31 @@ namespace Controller.Audio
                 host.ConfigureSource(e.Source, category);
             }
         }
-        public void RefreshGains() { foreach (var emitter in emitters) ApplyGain(emitter); }
+        public void RefreshGains(int categories = 7, int banks = 0)
+        {
+            foreach (var emitter in updating)
+                if (NeedsGain(emitter, categories, banks)) ApplyGain(emitter);
+            RefreshIdleReservedGains(categories, banks);
+        }
+        private void RefreshIdleReservedGains(int categories, int banks)
+        {
+            // The five compatibility sources expose their gain even while idle.
+            // Dynamic idle sources take current state in Start, just before Play.
+            foreach (var emitter in reserved)
+                if (emitter.UpdateIndex < 0 && NeedsGain(emitter, categories, banks)) ApplyGain(emitter);
+        }
         public void Tick(float delta)
         {
             using var mutation = callbacks.Begin();
             if (disposed) return;
             SyncListenerPause();
             for (int i = preparations.Count - 1; i >= 0; i--) CheckPreparation(preparations[i]);
-            bool gainsChanged = false;
+            int changedCategories = 0, changedBanks = 0;
             for (int i = 0; i < 4; i++) if (busTweens[i].Active)
-            { gainsChanged = true; ref var t = ref busTweens[i]; busGains[i] = t.Advance(delta); if (t.Done) t = default; }
+            { changedCategories |= ChannelMask((AudioChannel)i); ref var t = ref busTweens[i]; busGains[i] = t.Advance(delta); if (t.Done) t = default; }
             for (int i = 0; i < 5; i++) if (bankTweens[i].Active)
-            { gainsChanged = true; ref var t = ref bankTweens[i]; bankGains[i] = t.Advance(delta); if (t.Done) t = default; }
+            { changedBanks |= 1 << i; ref var t = ref bankTweens[i]; bankGains[i] = t.Advance(delta); if (t.Done) t = default; }
+            bool gainsChanged = changedCategories != 0 || changedBanks != 0;
             int iSource = 0;
             while (iSource < updating.Count)
             {
@@ -523,15 +544,14 @@ namespace Controller.Audio
                         else if (completion == TweenCompletion.Stop && ReferenceEquals(emitter.Current, target)) Finish(target, AudioCompletion.Stopped);
                     }
                 }
-                if (envelopeChanged) ApplyGain(emitter);
+                if (envelopeChanged || (gainsChanged && NeedsGain(emitter, changedCategories, changedBanks))) ApplyGain(emitter);
                 p = emitter.Current;
                 if (p != null && p.Handle.State == AudioPlaybackState.Playing && !p.Options.Loop && Time.frameCount > p.StartedFrame + 1 && !emitter.Source.isPlaying)
                     Finish(p, AudioCompletion.Completed);
                 // Recycle swaps the last active emitter into this position.
                 if (iSource < updating.Count && ReferenceEquals(updating[iSource], emitter)) iSource++;
             }
-            // Preserve legacy source-volume inspection while a bus/bank fade changes gain.
-            if (gainsChanged) RefreshGains();
+            if (gainsChanged) RefreshIdleReservedGains(changedCategories, changedBanks);
         }
         public void Preload(AudioClipAddress address, string group, Action<bool> completed)
         {
