@@ -20,7 +20,7 @@ namespace Controller.Audio.Editor
             foreach (var issue in issues) EditorGUILayout.HelpBox(issue, MessageType.Warning);
             if (issues.Count == 0) EditorGUILayout.HelpBox("Catalog keys are valid. Asset availability must be verified with the configured providers.", MessageType.Info);
             if (Application.isPlaying)
-                EditorGUILayout.HelpBox("After changing this catalog during playback, call AudioController.RefreshClipProvider() to refresh pending requests and cached clips.", MessageType.Info);
+                EditorGUILayout.HelpBox("Catalog changes refresh pending requests and cached lookups automatically. Existing playback keeps its current clip.", MessageType.Info);
         }
     }
 }

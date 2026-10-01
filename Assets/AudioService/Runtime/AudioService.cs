@@ -8,7 +8,7 @@ namespace Controller.Audio
     /// <summary>
     /// Recommended main-thread API. Add AudioCtrl.prefab to the entry scene first.
     /// Every Play method returns a handle; ignoring it never changes playback behavior.
-    /// AudioController retains the original APIs and advanced configuration.
+    /// AudioController owns dependencies and advanced configuration.
     /// </summary>
     public static class AudioService
     {
@@ -20,16 +20,16 @@ namespace Controller.Audio
 
         /// <summary>Loop music in the shared BGM slot. A successful replacement stops the previous music.</summary>
         public static AudioHandle PlayBgm(AudioId id, PlayOptions options = null)
-            => Request(AudioCategory.Bgm, id, null, options, 0);
+            => Request(AudioCategory.Bgm, id, null, options, PlaybackSlot.Bgm);
         /// <summary>Loop an externally owned clip in the shared BGM slot. The service never unloads this clip.</summary>
         public static AudioHandle PlayBgm(AudioClip clip, PlayOptions options = null)
-            => Request(AudioCategory.Bgm, default, clip, options, 0);
+            => Request(AudioCategory.Bgm, default, clip, options, PlaybackSlot.Bgm);
         /// <summary>Play an independent sound, including when Loop is enabled. Keep the handle to stop only this sound.</summary>
         public static AudioHandle PlaySfx(AudioId id, PlayOptions options = null)
-            => Request(AudioCategory.Sfx, id, null, options, -1);
+            => Request(AudioCategory.Sfx, id, null, options, PlaybackSlot.None);
         /// <summary>Play an independent, externally owned sound. The service never unloads this clip.</summary>
         public static AudioHandle PlaySfx(AudioClip clip, PlayOptions options = null)
-            => Request(AudioCategory.Sfx, default, clip, options, -1);
+            => Request(AudioCategory.Sfx, default, clip, options, PlaybackSlot.None);
         /// <summary>
         /// Replace the dialogue slot by default, regardless of Loop or whether the caller keeps the handle.
         /// Overlap plays independently; replacing the dialogue slot does not stop overlapping voices.
@@ -44,14 +44,12 @@ namespace Controller.Audio
         {
             if (mode != VoicePlaybackMode.Replace && mode != VoicePlaybackMode.Overlap)
                 return Failed(AudioCategory.Voice, id, "Invalid VoicePlaybackMode. Use Replace or Overlap.");
-            // Share the existing non-loop dialogue slot. Loop remains a playback
-            // option, so changing it does not select a different replacement slot.
-            return Request(AudioCategory.Voice, id, clip, options, mode == VoicePlaybackMode.Replace ? 3 : -1);
+            return Request(AudioCategory.Voice, id, clip, options, mode == VoicePlaybackMode.Replace ? PlaybackSlot.Dialogue : PlaybackSlot.None);
         }
-        private static AudioHandle Request(AudioCategory category, AudioId id, AudioClip clip, PlayOptions options, int bank)
+        private static AudioHandle Request(AudioCategory category, AudioId id, AudioClip clip, PlayOptions options, PlaybackSlot slot)
         {
             var controller = AudioController.Instance;
-            return controller != null ? controller.Request(category, id, clip, options, bank)
+            return controller != null ? controller.Request(category, id, clip, options, slot)
                 : Failed(category, id, "AudioController is missing. Add AudioCtrl.prefab to the entry scene and call playback from Start or later.");
         }
         private static AudioHandle Failed(AudioCategory category, AudioId id, string reason)
@@ -77,12 +75,12 @@ namespace Controller.Audio
 
         /// <summary>Stop all music. New playback after this call is not stopped by the old fade.</summary>
         public static void StopBgm(float fadeOutSeconds = 0f) => Controller?.StopBgm(fadeOutSeconds);
-        /// <summary>Stop ALL SFX, including loops and sounds started through legacy APIs. For one sound use its handle.</summary>
-        public static void StopSfx(float fadeOutSeconds = 0f) => Controller?.StopSfx(false, fadeOutSeconds);
-        /// <summary>Stop ALL voices, including dialogue, overlapping voices and legacy loops.</summary>
-        public static void StopVoice(float fadeOutSeconds = 0f) => Controller?.StopVoice(false, fadeOutSeconds);
+        /// <summary>Stop all SFX, including loops. For one sound use its handle.</summary>
+        public static void StopSfx(float fadeOutSeconds = 0f) => Controller?.StopSfx(fadeOutSeconds);
+        /// <summary>Stop all voices, including dialogue and overlapping voices.</summary>
+        public static void StopVoice(float fadeOutSeconds = 0f) => Controller?.StopVoice(fadeOutSeconds);
         /// <summary>
-        /// Fade a whole category (or Master), including old and new APIs. Does not change saved player volume.
+        /// Fade a whole category (or Master). Does not change saved player volume.
         /// The gain persists for future playback; fade back to 1 to restore it. stopAfter stops only existing playback.
         /// </summary>
         public static void FadeBus(AudioChannel channel, float targetVolume, float seconds, bool stopAfter = false)

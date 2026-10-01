@@ -2,9 +2,9 @@
 
 文件日期：2026-10-01
 
-文件版本：1.21
+文件版本：1.23
 
-狀態：完成播放配置、增益更新與 Addressables 釋放三項效能優化及前後量測（見 5.17）；最終版本 275 項 PlayMode、24 項 Editor／Reload、159 項 macOS Player 選定測試於無圖形／批次 Metal 模式各通過。視窗畫面、人工操作與聽感未驗收；第三階段套件化尚未開始
+狀態：完成六項架構收斂與技術債重構（見 5.18）；285 項 PlayMode、24 項 Editor／Reload、209 項 macOS Player 選定測試於無圖形／批次 Metal 模式各通過。未安裝 Addressables 的獨立核心亦已建置與播放驗證；UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -73,7 +73,7 @@
 
 ## 2. 目標與設計原則
 
-保留目前有價值的架構：`IAudioClipProvider`／`IAsyncAudioClipProvider`、`IAudioSettingsHandler`、BGM／SFX／Voice 分類，以及 Mixer 路由。
+保留有價值的責任邊界：素材 Provider、`IAudioSettingsHandler`、BGM／SFX／Voice 分類，以及 Mixer 路由。§5.18 已將舊同步／非同步 Provider 介面收斂到 lease 契約；前文審查及 §4～§5.17 的舊 API 描述保留為歷史紀錄，現行契約以 Documentation 為準。
 
 改善工作遵循以下原則：
 
@@ -109,6 +109,24 @@
 - 使用流程有變動時，以對應任務實際驗證，例如初次播放、替換語音、停止單一聲音或換場清理；記錄驗證結果與尚未驗證的部分。功能測試通過或效能改善，不能單獨視為易用性已驗收。
 
 純內部或文字修正可簡要註明對使用流程的影響，不要求每次都做完整的新手試用；涉及安裝或入門流程的大幅變更時，再安排乾淨專案與新使用者驗證。
+
+### 2.2 後續修改的固定程式碼維護準則
+
+**「盡可能精簡優雅，並移除或優化可能造成技術債的程式碼」是使用者指定的長期開發與維護原則。** 所有後續缺陷修正、重構、效能優化、新增功能、API、Inspector／編輯器工具、範例及套件化，都必須與 2.1 的易用性準則一併遵循。
+
+1. **以理解與維護成本衡量精簡。** 優先減少重複邏輯、特殊分支、隱含規則與不必要依賴，使用清楚命名和易讀的控制流程。不得為了縮短行數，把多個狀態變更壓在同一行，或將複雜度轉嫁給呼叫端。
+2. **讓每個抽象與分支都有存在理由。** 相同責任收斂到單一實作與明確契約；移除已無用途的程式、過時包裝及重複入口。新增抽象、狀態、快取或相容分支，須有實際需求、可驗證的收益或必要的行為保障，避免只為假設中的未來需求增加結構。
+3. **明確管理狀態與所有權。** 初始化、素材取得與釋放、播放控制及設定同步應有清楚的責任邊界；可變資料透過受控入口更新，減少多處各自維護同一狀態，以及依賴呼叫順序或魔法數值的規則。
+4. **維護時主動處理相關技術債。** 每次修改都檢視觸及範圍，優先移除或優化其中可確認的技術債。暫時保留的相容層或特殊處理須說明使用依據；若要淘汰公開 API、行為或序列化資料，需盤點引用並提供影響及遷移說明。需要獨立處理的大型重構，記錄原因與後續處理條件，維持每批變更可審查、可驗證。
+5. **以正確性與驗證支撐簡化。** 取消、回呼重入、素材持有、handle 失效與生命週期等必要保護，應保留或以等效設計取代。重構以對應行為的回歸測試驗證；涉及效能取捨時，使用代表性測點比較，避免為表面簡化引入資源洩漏、競態或效能退步。
+
+**每次修改的維護性檢查：** 依改動規模，在實作說明或驗收紀錄中簡要確認：
+
+- 哪些重複邏輯、分支、狀態或依賴已刪除、整併或簡化；若有新增複雜度，說明必要性。
+- 觸及範圍仍有哪些技術債，暫緩處理的原因與後續處理條件；若未發現則簡要註明。
+- 行為、相容性、資源生命週期及效能的影響，以及相應驗證結果與尚未驗證的部分；受影響的文件與範例同步更新。
+
+此原則用於持續降低維護成本，不以程式行數或類別數量作為完成指標。v1.22 僅固定此準則；其後使用者核准本輪重構，舊相容 API 的具體淘汰範圍、影響及驗證記錄於 §5.18 與遷移指南，不延伸為未來任意移除 API 的授權。
 
 ## 3. 三階段總覽
 
@@ -925,6 +943,76 @@ macOS Player 選定測試在無圖形與批次 Metal 模式各 **119／119** 通
 
 本輪沒有變更素材匯入、Prefab、Mixer 或正式專案設定。視窗畫面、人工點按、人工聽感、其他 Unity 版本／平台、IL2CPP 與真實遊戲輸出延遲尚未驗收；UPM 拆分、快取預算／LRU、3D 與 DSP 仍維持各自規劃。
 
+### 5.18 架構收斂與技術債重構
+
+記錄日期：2026-10-01。使用者核准六項重構方向後開始實作，起點 `efc0562`，沿用 `improvement/stage-two-core`。本輪允許淘汰舊相容 API，不建立另一套長期相容層；§4～§5.17 的相容性描述是當時驗收紀錄，**本輪變更以 [Migration](Documentation/Migration.md) 為準**。
+
+**完成範圍與維護成本**
+
+| 方向 | 實作與移除內容 |
+| --- | --- |
+| 統一播放模型 | 保留 AudioService 推薦入口；引擎改為 BGM／對話兩個具名替換槽及獨立播放，全部共用動態聲源池。移除五個固定聲源、bank 數字、分支增益／淡變及 Controller 舊 Play*／*Handle／FadeChannel 包裝；Loading 不先建立聲源 |
+| Provider 所有權 | 必要介面只保留純查快取、同步取得 lease、回呼取得 lease 三個方法；移除 coroutine 相容轉接與舊 cache／result／sync／lease 多介面組合。Store 管使用者與群組，Provider 管 native 資產，刷新與診斷是可選能力 |
+| 單一初始化宿主 | Controller 明確配置 Provider 與 Settings，Awake／重啟／Reload 重接都走 Initialize；移除 Bootstrap、全域註冊與依賴搜尋。Mixer／音量／設定同步抽成非 MonoBehaviour 的 AudioMixerState，不增加場景設定步驟 |
+| 可選 Addressables | 核心 assembly 零 Addressables 引用，adapter 移到 Integrations/Addressables 並保留腳本 GUID；Fallback 只依 Provider 契約選擇來源，不自動建立元件或判斷具體型別。基本 Prefab 為 Resources-only，另提供明確配置的整合版 Prefab |
+| 受控資料邊界 | Catalog 以 ReplaceEntries 深複製編輯資料及 aliases，GetEntriesCopy 只提供副本，查詢回傳 readonly ResolvedAudioClip；發布後自動使舊查找失效，Controller 不重建已發布的相同索引。handle 內部播放參照與替換槽皆改為具名型別 |
+| 範例及測試 | DebugMenu 移入 Samples 並保留 GUID，改用 AudioService；原場景引用維持。測試遷移到新 API／所有權語意，聲源白箱查詢集中於本機 AudioTestAccess；核心只提供必要 friend 存取，不引用或載入測試 assembly |
+
+保留取消世代、回呼 mutation queue、晚到結果歸還、lease 冪等釋放、終態後舊 handle 失效、原子並發拒絕、暫停原因分離、音訊重設，以及先前暖 Usage／別名索引優化。這些有明確行為保障，不以刪除保護流程換取較短程式。
+
+**使用與遷移影響**
+
+- 基本使用仍是放入 AudioCtrl Prefab，再呼叫 AudioService；直接 clip 播放不必配置 Provider。基本 Prefab 不會隱含嘗試 Addressables，需要該來源時選用 AudioCtrlAddressables。
+- 舊 Controller 播放、循環專用停止與任意分支淡變需遷移；SFX Loop 改為獨立播放，由呼叫端保存 handle。VoiceHandle 舊並發呼叫應明確選擇 Overlap；FadeChannel 不能一律機械改名為 FadeBus。
+- 移除 Bootstrap 腳本會影響外部自訂 Prefab；須移除舊元件並在 Controller 重新指定依賴。自訂 UnityEvent 需重綁 void adapter。專案內已同步 Prefab、範例及 Inspector，原基本 Prefab、設定引用與移動腳本 GUID 保留。
+- Catalog 舊 Unity 資產欄位有 FormerlySerializedAs；JsonUtility 的舊 `Entries` JSON 欄位須遷移為 `entries`，更建議匯入 authoring 資料後呼叫 ReplaceEntries。查詢不再回傳可修改原物件。
+- 完整契約與遷移對照見 [AudioServiceReference](Documentation/AudioServiceReference.md) 及 [Migration](Documentation/Migration.md)。不宣稱外部使用者的場景與腳本已自動升級。
+
+**回歸與獨立建置**
+
+| 驗證 | 結果 |
+| --- | --- |
+| 重構前基準 | PlayMode 275／275；Editor／Reload 24／24 |
+| 最終完整 PlayMode | 285／285，無失敗／跳過，含效能量測 |
+| Editor／Reload | 24／24，涵蓋 Catalog、匯入工具、Inspector 檢查及關閉 Domain／Scene Reload 的重入 |
+| macOS Player | 無圖形及批次 Metal 各 209／209，無失敗／跳過；content build 與 Player build 成功 |
+| 實際 Addressables | packed clip、address／GUID 共用、HTTP catalog／AssetBundle 更新、舊 lease 與取消行為通過；HTTP 僅使用本機 loopback |
+| 無 Addressables 專案 | 只安裝內建 audio／imgui／jsonserialize 模組，匯入正式 Runtime／Editor／Samples／Integrations；確認 adapter assembly 未載入、核心沒有相關引用，基本 Prefab 無 Missing Script |
+| Resources-only Player | 建置成功；啟動、零固定來源、預熱、ID 播放、暫停／恢復、對話替換、釋放與縮池 smoke 通過；不依賴主專案 Tests／Tools |
+
+本機新邊界測試涵蓋未配置 Fallback 不產生隱含元件、自訂同步 Provider、純查快取、PrimaryThenBackup 政策、子來源通知／晚到 lease、循環依賴拒絕、Awake 順序與 Resources 刷新持有。播放回歸另涵蓋替換共用來源、Loading 不占來源及失敗保留舊播放。
+
+遷移中保留原失敗紀錄：首輪完整測試 228／277，主要來自舊固定來源／物件同一性斷言與 Addressables 刷新 fixture 未等待新的 location 回呼；失敗清理不完整又造成後續測試污染。更新測試到現行契約、補 finally／TearDown 清理後 277／277，再加入邊界案例達 285／285。未刪除仍有意義的取消、釋放、重入等斷言。JsonUtility 舊欄位的單一失敗亦保留並列入遷移限制。
+
+**同機效能與取捨**
+
+沿用前輪 native 配置探針與校驗；比較本輪 `refactor-baseline20261001` 與 `refactor-verified`，暖身後 7 次中位數。播放使用暖池、已駐留素材及既有 PlayOptions，不含首次載入；CPU 含探針成本。未將 Editor 數字套用為 Player、DSP、輸出延遲或整體遊戲幀率保證。
+
+| 測點 | 重構前 | 重構後 |
+| --- | --- | --- |
+| 256 次暖快取 ID 播放 | 0.3976 ms；49,152 bytes／512 事件 | 0.4291 ms；49,152 bytes／512 事件 |
+| 256 次直接 clip 播放 | 0.4273 ms；49,152 bytes／512 事件 | 0.4207 ms；49,152 bytes／512 事件 |
+| 256 聲音整批停止 | 0.1619 ms；0 bytes | 0.1502 ms；0 bytes |
+| 256 聲音暫停／恢復 | 0.0273 ms；0 bytes | 0.0327 ms；0 bytes |
+| 1,024 容量、1 使用中，1,000 次 Master 淡變 Tick | 0.3561 ms；0 bytes | 0.1182 ms；0 bytes |
+| 同池及使用量，1,000 次無淡變 Tick | 0.0572 ms；0 bytes | 0.0503 ms；0 bytes |
+| 256 操作各 8 別名的批次釋放 | 0.4822 ms；0 bytes | 0.5674 ms；0 bytes |
+| 1,000 筆 Catalog 索引重建 100 次 | 9.9771 ms；300 配置事件 | 16.3716 ms；300 配置事件 |
+
+- 暖播放仍是每次 **192 bytes／2 事件**；本輪沒有降低此配置量，也沒有宣稱所有 CPU 測點均改善。別名釋放及部分控制呼叫稍慢；先前相同程式的完整 run 亦有波動，所有 CSV 留存，不挑最快一次作結論。
+- 去除固定相容來源後，空服務由五個 AudioSource 改為零個，平常淡變不再更新相容來源。動態池容量與預熱／縮池統計改為全部來源總數。
+- Catalog 索引改存不可變值，避免外部修改滲入已解析資料，但每筆字典值較大。32 份各 1,000 筆 Catalog 的索引增量堆觀察由 2,883,584 升至 5,242,880 bytes；約每份 88 KiB → 160 KiB。這是帶噪音的整體 managed heap 觀察，不是精確物件大小；不含 ReplaceEntries 深複製 authoring 資料的額外成本。保留此安全性取捨，更新安排在資料發布時，不放入每幀路徑。
+- 1,800 批、每批 8 次暖播放、最多 64 聲音：總配置同為 2,764,800 bytes，呼叫中位數 0.0443 → 0.0453 ms，p99 0.0565 → 0.0592 ms，最大值 0.0720 → 0.0695 ms；程序 Gen0 同為 6 次。不能推論消除尖峰或模組零 GC。
+- Catalog 堆量測 fixture 在新 ReplaceEntries 先建索引後，額外明確失效索引再開始量測，確保比較的都是索引增量；中間 `refactor-regression02` 的零增量資料不採用。別名索引建立配置保持 0／104／200 bytes（每操作 1／2／8 別名），沒有加回舊快取持有。
+
+**證據、界線與後續**
+
+基準原始碼／測試備份、失敗及最終結果、摘要與乾淨專案保存於 `work/refactor-20261001/`；完整 Editor XML／log 在 `work/stage-two-hardening/refactor-*`，CSV 沿用 `work/performance-refinement-20260930/`、`work/core-performance-20261001/`、`work/core-optimization-20260930/` 的同名 label。本機重跑說明見 `Tools/AudioService/REFACTOR.md`。測試、工具與 work 繼續依 §9.1 忽略；不新增正式 Runtime 對它們的依賴。
+
+最終核對 57 個專案／套件／Addressables 設定及指定 URP 資產內容未變；移動腳本及基本 Prefab 的 GUID 保留，正式模組沒有缺少 `.meta`、重複 GUID 或已刪腳本引用。`git diff --check` 通過，最終 C# 建置 log 未見編譯錯誤／警告。建置新增的四個未追蹤檔留存於本輪 `generated/`，不混入正式變更；查核輸出見 `audit.json`。
+
+本輪沒有改素材匯入設定、Mixer、套件版本或正式 ProjectSettings。仍保留需實際需求再處理的工作：UPM 宿主／範例資產分離、授權／CI、代表性遊戲的記憶體預算與效能驗收；不為假設需求加入 LRU、3D 或 DSP。少數引擎／來源數值測試仍有刻意保留的白箱入口，不宣稱已消除全部技術債。視窗畫面、人工操作／聽感、新使用者研究、其他 Unity 版本／平台及 IL2CPP 尚未驗證。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -935,7 +1023,7 @@ macOS Player 選定測試在無圖形與批次 Metal 模式各 **119／119** 通
 
 Prefab 的 AudioController 與場景的 DebugMenu 留有舊 namespace 的 `m_EditorClassIdentifier`，但其 `m_Script` GUID 可對應現有腳本；此靜態差異不直接等於 Missing Script。加入 asmdef／變更 assembly 時，以 Unity 匯入與重新序列化結果驗證，避免只改字串卻破壞引用。
 
-Addressables 整合獨立成 adapter 套件／assembly，隔離全部相關引用，包括 Fallback 中的自動建立邏輯。核心＋Resources 模式在未安裝 Addressables 時仍須能編譯。套件位置、名稱與 Git 安裝網址在正式整理時確定，並用乾淨專案驗證。
+§5.18 已完成獨立 Addressables assembly、移除 Fallback 自動建立邏輯，以及未安裝 Addressables 的核心匯入／Player 建置與播放。第三階段仍須完成 adapter 的 UPM 交付；套件位置、名稱與 Git 安裝網址在正式整理時確定，並重新驗證乾淨專案的實際安裝流程。
 
 示範專案可以保留自己的渲染與編輯器套件，音訊核心只宣告實際需要的依賴。
 
@@ -964,9 +1052,9 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 ### 6.4 驗收條件
 
 - [ ] 乾淨 Unity 專案能依 README 安裝並執行基本範例。
-- [ ] 核心套件未安裝 Addressables 時可編譯。
+- [x] 目前核心模組未安裝 Addressables 時可編譯及獨立建置；UPM 安裝驗收仍待套件交付（§5.18）。
 - [ ] 安裝 adapter 後，非同步載入與取消範例可執行。
-- [ ] Addressables content build 完成後，測試 Player 可載入示範素材；Resources-only 也有獨立建置驗證。
+- [x] Addressables content build 完成後，測試 Player 可載入示範素材；Resources-only 也有獨立建置驗證（§5.18）。
 - [ ] 套件移動後，Prefab、Mixer 與範例引用仍有效。
 - [ ] 文件、API、依賴與實際測試過的版本一致。
 - [ ] 版本、變更紀錄、授權與範例素材資訊齊全。
@@ -1038,7 +1126,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 2. 開工時重新確認本機變更、分支與遠端基準，並記錄開始提交。第二階段工作沿用既有 `improvement/stage-two-core`，不因單次修正或優化另開分支；使用者另有分支指示時依其要求執行。目前此 clone 非淺層，無需預先補取歷史。保留使用者未提交的內容，首次提交時明確納入計劃文件，不順帶加入 `.DS_Store`。
 3. 分批完成：基準與測試 → 播放取消 → 淡出一致性 → Addressables 安全性 → handle／素材持有 → 聲源與設定 → 套件與文件。
 4. 每批保留可審查的提交，說明問題、實作、相容性影響與驗證結果；提交正式功能與必要文件，本機測試、輔助腳本與臨時輸出不納入提交。
-5. 每批修改依 [2.1 的易用性準則](#21-後續修改的固定易用性準則) 檢查對使用流程的影響；每階段通過驗收後再往下一階段推進。新發現的問題記錄到對應階段，避免混入無關功能。
+5. 每批修改依 [2.1 的易用性準則](#21-後續修改的固定易用性準則) 與 [2.2 的程式碼維護準則](#22-後續修改的固定程式碼維護準則) 檢查使用流程、程式結構及技術債處理；每階段通過驗收後再往下一階段推進。新發現的問題記錄到對應階段，避免混入無關功能。
 6. 發布前彙整安裝方式、升級影響、授權與測試矩陣。遠端推送、PR 與版本發布依後續實作／發布指示執行。
 
 本文件不設定未經基準測試支持的工期。完成標準以可驗證的里程碑為主。
@@ -1120,6 +1208,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成範例失敗／拒絕後的控制權與重入修正、Inspector 名稱及唯讀集中檢查；258 項 PlayMode、24 項 Editor／Reload、119 項 macOS Player 於無圖形／批次 Metal 模式各通過（見 5.15）。
 - [x] 完成播放配置、增益更新與 Addressables 釋放三項效能優化的範圍、分批實作與量測／驗收規劃；規劃階段僅修改計畫文件（見 5.16）。
 - [x] 完成 §5.16 三批實作、前後量測與索引成本調整；275 項 PlayMode、24 項 Editor／Reload、159 項 macOS Player 無圖形／批次 Metal 各通過，收益與限制見 §5.17。
+- [x] 完成六項架構收斂、舊 API 遷移與可選 Addressables；285 項 PlayMode、24 項 Editor／Reload、209 項 macOS Player 兩模式及 Resources-only 獨立 Player 通過，取捨及界線見 §5.18。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1160,3 +1249,5 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.19 | 2026-09-30 | 修正範例失敗／拒絕後的控制權與回呼重入；新增唯讀集中音訊檢查，改善 Inspector 名稱並保留序列化相容性；依易用性準則記錄使用流程、驗證與界線，見 §5.15 |
 | 1.20 | 2026-10-01 | 依使用者選定的三項優化新增 §5.16：播放配置、受影響聲源增益更新與 Addressables 操作別名索引；列出分批實作、相容性邊界、前後量測與驗收條件。僅更新計畫，程式與新量測尚未執行 |
 | 1.21 | 2026-10-01 | 完成三項核心效能優化，新增 §5.17 記錄同機前後量測、索引建立／保留成本與限制；完整 PlayMode 275、Editor／Reload 24、macOS Player 無圖形／Metal 各 159 項通過；基本 API 不變，測試與工具僅留本機 |
+| 1.22 | 2026-10-01 | 將「盡可能精簡優雅，並移除或優化可能造成技術債的程式碼」列為所有後續修改的固定準則，新增 §2.2 的責任邊界、相容性取捨與維護性檢查，並從 README 與開發流程連結；僅更新文件，尚未執行重構或新增執行期驗證 |
+| 1.23 | 2026-10-01 | 依核准完成播放／Provider／初始化／可選依賴／Catalog／範例測試六項重構；補破壞性 API 遷移、285 項 PlayMode、24 項 Editor、Player 兩模式各 209 項及未安裝 Addressables 的獨立建置，記錄效能與 Catalog 記憶體取捨，見 §5.18 |

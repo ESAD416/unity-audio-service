@@ -11,7 +11,7 @@ namespace Controller.Audio
         private readonly HashSet<(AudioCategory, string, string)> reported = new();
         private bool limitReported;
         public void Report(AudioController controller, AudioHandle handle, string reason,
-            AudioClipAddress address = null, bool allowAsync = true)
+            ResolvedAudioClip? address = null, bool allowAsync = true)
         {
             var key = (handle.Category, handle.AudioId.Value, reason);
             if (reported.Contains(key)) return;
@@ -26,22 +26,15 @@ namespace Controller.Audio
             }
             reported.Add(key);
             string lookup = address == null ? string.Empty
-                : " Configured lookup: " + DescribeProvider(controller != null ? controller.ClipProvider : null, address)
+                : " Configured lookup: " + DescribeProvider(controller != null ? controller.ClipProvider : null, address.Value)
                   + ". Check the category, case-sensitive key and Catalog mapping. Resources keys omit the extension; Addressables keys must exist in the active catalog."
                   + (allowAsync ? string.Empty : " AllowAsyncLoad=false: Addressables must already be resident; Resources may load synchronously.");
             Debug.LogWarning($"[AudioService] {handle.Category} '{handle.AudioId.Value}' failed: {reason}.{lookup}", controller);
         }
-        internal static string DescribeProvider(IAudioClipProvider provider, AudioClipAddress address, int depth = 0)
+        internal static string DescribeProvider(IAudioClipProvider provider, ResolvedAudioClip address)
         {
-            if (!AudioValues.Alive(provider)) return "no live provider; connect AudioBootstrap's Clip Provider Source";
-            if (depth >= 4) return "nested fallback (inspect provider configuration)";
-            if (provider is ResourcesAudioClipProvider resources) return resources.DescribeLookup(address);
-            if (provider is AddressablesAudioClipProvider)
-            {
-                string key = address.AddressablesKey ?? address.Id;
-                return string.IsNullOrWhiteSpace(key) ? "Addressables disabled (empty key)" : $"Addressables key='{key}'";
-            }
-            if (provider is FallbackAudioClipProvider fallback) return fallback.DescribeLookup(address, depth);
+            if (!AudioValues.Alive(provider)) return "no live provider; connect AudioController's Clip Provider Source";
+            if (provider is IAudioClipProviderDiagnostics diagnostics) return diagnostics.DescribeLookup(address);
             return provider.GetType().Name + " (custom provider; inspect its own lookup diagnostics)";
         }
     }

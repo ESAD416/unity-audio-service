@@ -2,7 +2,7 @@
 
 以簡單、好用、操作直覺為目標的 2D 音訊服務。日常程式使用 `Controller.Audio.AudioService`：播放 BGM、音效與語音，取得 handle 控制單一聲音，或調整玩家音量。
 
-後續修正、優化、擴充與套件化均遵循 [固定易用性準則](unity-audio-service-improvement-plan.md#21-後續修改的固定易用性準則)。
+後續修正、重構、優化、擴充與套件化均遵循 [固定易用性準則](unity-audio-service-improvement-plan.md#21-後續修改的固定易用性準則) 與 [固定程式碼維護準則](unity-audio-service-improvement-plan.md#22-後續修改的固定程式碼維護準則)：保持簡單、好用、操作直覺，並使程式碼盡可能精簡優雅，移除或優化可能造成技術債的程式碼。
 
 ```csharp
 using Controller.Audio;
@@ -99,7 +99,7 @@ var wind = AudioService.PlaySfx("wind", new PlayOptions
 | 暫時靜音，不停止播放 | `AudioService.SetMuted(AudioChannel.Master, true)` |
 | 遊戲暫停／繼續 | `AudioService.SetGamePaused(true)`／`SetGamePaused(false)` |
 
-音量使用 0～1。`FadeBus` 涵蓋推薦與相容 API 的全部同類聲音，不改玩家保存的音量；淡變後的增益也套用到後續新聲音，需恢復至 1 才解除分類衰減。單純停止一批聲音請用 `StopSfx(seconds)` 等方法。
+音量使用 0～1。`FadeBus` 涵蓋全部同類聲音，不改玩家保存的音量；淡變後的增益也套用到後續新聲音，需恢復至 1 才解除分類衰減。單純停止一批聲音請用 `StopSfx(seconds)` 等方法。
 
 `Time.timeScale = 0` 不會自動呼叫音訊暫停。暫停時仍需播放的 UI 音效，可在 `PlayOptions` 設 `IgnoreGamePause = true`。
 
@@ -130,20 +130,21 @@ sound.Completed += h =>
 
 結束後訂閱仍會收到結果。缺少或停用 Controller 時，播放入口也會回傳 Failed handle，便於處理；服務不會默默建立場景物件。Controller Inspector 顯示 Ready、播放數與最近一次歷史失敗。
 
-Inspector 的 `Max Concurrent Sounds` 是 BGM、SFX、Voice 合計的並發請求上限，包含載入中與暫停，`0` 表示服務不設上限。音量設定元件的 `Auto Save` 會在最後一次音量變動後等待 `Save Delay` 再儲存，聲音音量立即生效；停用元件或進入背景仍會保存待寫入設定。這些都是原有設定的新顯示名稱，既有 Prefab 不需要遷移。
+Inspector 的 `Max Concurrent Sounds` 是 BGM、SFX、Voice 合計的並發請求上限，包含載入中與暫停，`0` 表示服務不設上限。音量設定元件的 `Auto Save` 會在最後一次音量變動後等待 `Save Delay` 再儲存，聲音音量立即生效；停用元件或進入背景仍會保存待寫入設定。這兩項顯示名稱調整不改序列化欄位；本輪依賴配置等其他變更仍須依遷移指南調整自訂 Prefab。
 
 ## 需要時再使用
 
 - **載入畫面與換場**：[完整場景素材範例](Documentation/SceneAudio.md)，包含準備、取消、停止自己持有的聲音、釋放保留，以及跨場景 BGM 的歸屬。
-- **Catalog、Addressables、自訂來源、快取、預熱與並發限制**：[進階與相容 API 參考](Documentation/AudioServiceReference.md)。
-- **既有程式**：`AudioController` 的公開方法與原本行為保留。特別是 `PlayVoiceHandle` 仍為並發語音，`FadeChannel` 仍為舊分支控制；新程式統一採用本頁的 `AudioService`。推薦語音替換槽與舊非循環語音槽共用，舊循環語音槽保留；避免混用兩套對話控制方式。
+- **Catalog、自訂來源、快取、預熱與並發限制**：[進階 API 參考](Documentation/AudioServiceReference.md)。
+- **Addressables**：安裝 Addressables 後使用 [AudioCtrlAddressables.prefab](Assets/AudioService/Integrations/Addressables/AudioCtrlAddressables.prefab)。基本 AudioCtrl 僅使用 Resources；adapter 位於獨立 assembly。
+- **既有程式升級**：[重構遷移指南](Documentation/Migration.md)。舊 Controller 播放包裝、分支淡變、Bootstrap 與舊 Provider 介面已移除；`AudioService` 的播放規則保持一致。
 
 ## 專案狀態
 
-目前是 Unity 專案，UPM 套件拆分尚未開始。驗證環境為 Unity 6000.6.3f1、Addressables 2.11.2、Test Framework 1.8.0；即使只用 Resources，Runtime assembly 目前仍要求安裝 Addressables。範例不代表已驗證其他版本或平台。
+目前是 Unity 專案，尚未完成 UPM 套件交付。驗證環境為 Unity 6000.6.3f1、Addressables 2.11.2、Test Framework 1.8.0。核心不再引用 Addressables；可選整合位於 `Integrations/Addressables`。範例不代表已驗證其他版本或平台。
 
-最新回歸：PlayMode 275／275、Editor／Reload 24／24，macOS Player 無圖形與批次 Metal 各 159／159 通過，包含真實 packed content／catalog 更新、範例控制／卸載及素材生命週期。視窗畫面、人工操作與聽感仍未驗收，也尚未進行新使用者操作研究。
+本輪重構：PlayMode 285／285、Editor／Reload 24／24、macOS Player 無圖形／批次 Metal 各 209／209 通過。未安裝 Addressables 的乾淨專案亦完成獨立 Player 建置與播放驗證；詳見改善計畫 §5.18。視窗畫面、人工操作與聽感仍未驗收，也尚未進行新使用者操作研究。
 
-已降低暖快取播放配置，讓平常音量更新排除動態閒置聲源，並縮小 Addressables 釋放時的別名查找範圍。同機 Editor 的指定暖快取測點由每次 424 降至 192 bytes；效能數字、索引建立成本與適用條件見改善計畫 §5.17，基本呼叫方式不變。
+先前的暖播放與別名釋放優化保留；指定暖快取測點仍為每次 192 bytes。本輪移除五個固定相容聲源並降低相關增益更新工作，Catalog 不可變索引則增加了記憶體與重建成本；並非所有 CPU 測點都更快。歷次量測、取捨與適用條件見改善計畫 §5.17～5.18。
 
 可靠性、效能與本輪使用流程驗證見[改善計畫](unity-audio-service-improvement-plan.md)，相容性紀錄見 [CHANGELOG](CHANGELOG.md)。入門場景和範例會隨專案提供；本機測試及工具依既有規則留在受 Git 忽略的 Tests／Tools／work。

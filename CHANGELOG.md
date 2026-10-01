@@ -1,5 +1,21 @@
 # 變更紀錄
 
+## Unreleased - 架構收斂與技術債重構（2026-10-01）
+
+- 播放收斂為 BGM／對話替換槽與獨立播放，共用動態聲源池；移除五個固定相容聲源、bank／分支增益與淡變，以及 Controller 舊播放包裝。Loading 不先占用 AudioSource；保留取消、回呼重入、素材持有、舊 handle 失效與暫停保護。
+- Provider 改為單一必要 lease 契約，清除 coroutine／cache／result 相容分支；查快取不載入，同步取得與回呼取得都有釋放責任。Fallback 明確配置主備來源，不再依具體型別分支或自動建立元件。
+- Controller 成為單一初始化與依賴宿主，移除 Bootstrap／全域註冊；Mixer 與設定同步抽成 AudioMixerState。Addressables 移入可選 assembly，基本 Prefab 改為 Resources-only，另提供整合版 Prefab。
+- Catalog 發布深複製資料、查詢回傳不可變結果，改用 GetEntriesCopy／ReplaceEntries，移除公開可變 Entries。DebugMenu 移入 Samples 並保留 GUID；範例、Inspector 與本機測試同步遷移。
+- **破壞性變更**：舊 Controller API、Bootstrap、自訂 Provider、UnityEvent 及 Catalog JSON 需依 [遷移指南](Documentation/Migration.md) 調整；AudioService 日常播放語意保持。舊 FadeChannel 不能一律換名成 FadeBus，循環音效由 handle 管理。
+- 完整 PlayMode 285／285、Editor／Reload 24／24、macOS Player 無圖形／批次 Metal 各 209／209 通過；無 Addressables 的乾淨專案匯入／Player 建置與播放 smoke 通過。測試與工具繼續只留本機。
+- 暖播放仍為每次 192 bytes；1,024 容量、1 使用中的 1,000 次 Master 淡變 0.3561 → 0.1182 ms。部分控制／釋放 CPU 及不可變 Catalog 索引記憶體、重建成本增加；完整前後資料與限制見改善計畫 §5.18，不宣稱全面加速或零技術債。UPM、人工聽感、其他平台與 IL2CPP 尚未驗收。
+
+## Unreleased - 固定程式碼維護準則（2026-10-01）
+
+- 將「盡可能精簡優雅，並移除或優化可能造成技術債的程式碼」納入改善計畫 §2.2，適用於所有後續修改與維護，並與既有易用性準則一併執行。
+- 明訂減少重複與過時設計、清楚的狀態與所有權、相容層的保留依據，以及以行為回歸和必要效能量測驗證簡化；README 與開發流程加入連結。
+- 本次僅更新文件，未修改程式、移除既有 API 或重新執行 Unity 測試。
+
 ## Unreleased — 播放配置、增益更新與 Addressables 釋放（2026-10-01）
 
 - 無 Catalog 的暖播放／拒絕請求省去預設地址物件；引擎的駐留素材持有改為值資料，省去逐次 user lease／釋放閉包。直接 clip 的 ID 使用不持有 clip 的弱參照快取，Shutdown 清空。保留公開 handle、Provider lease、晚訂閱與原來源 key 語意。

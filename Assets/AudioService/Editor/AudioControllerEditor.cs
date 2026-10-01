@@ -26,7 +26,8 @@ namespace Controller.Audio.Editor
             using (new EditorGUI.DisabledScope(true))
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("m_Script"));
             EditorGUILayout.HelpBox("Use AudioService.PlayBgm / PlaySfx / PlayVoice. Every play returns a handle; keep it only when you need to control that sound. No preload or prewarm is required for basic playback.", MessageType.Info);
-            using (new EditorGUI.DisabledScope(Application.isPlaying)) { Field("mixer"); Field("catalog"); }
+            using (new EditorGUI.DisabledScope(Application.isPlaying))
+            { Field("clipProviderSource"); Field("settingsSource"); Field("mixer"); Field("catalog"); }
             Field("logPlaybackFailures");
             advanced = EditorGUILayout.Foldout(advanced, "Advanced settings", true);
             if (advanced)
@@ -39,7 +40,7 @@ namespace Controller.Audio.Editor
                     Field("concurrencyPolicy"); Field("pauseOnBackground");
                 }
                 Field("verboseLogging");
-                EditorGUILayout.HelpBox("Max Concurrent Sounds includes BGM, SFX and Voice. 0 means no service limit. Provider and saved volume settings are connected by AudioBootstrap.", MessageType.Info);
+                EditorGUILayout.HelpBox("Max Concurrent Sounds includes BGM, SFX and Voice. 0 means no service limit.", MessageType.Info);
             }
             if (serializedObject.ApplyModifiedProperties()) { issues = null; nextCheck = 0; }
             var controller = (AudioController)target;

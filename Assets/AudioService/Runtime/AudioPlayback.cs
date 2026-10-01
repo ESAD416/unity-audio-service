@@ -6,9 +6,15 @@ namespace Controller.Audio
     [Serializable]
     public struct AudioId : IEquatable<AudioId>
     {
-        [SerializeField] private string value;
+        [SerializeField]
+        private string value;
         public string Value => value ?? string.Empty;
-        public AudioId(string value) { this.value = value?.Trim() ?? string.Empty; }
+
+        public AudioId(string value)
+        {
+            this.value = value?.Trim() ?? string.Empty;
+        }
+
         public bool Equals(AudioId other) => StringComparer.Ordinal.Equals(Value, other.Value);
         public override bool Equals(object obj) => obj is AudioId other && Equals(other);
         public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Value);
@@ -16,10 +22,35 @@ namespace Controller.Audio
         public static implicit operator AudioId(string value) => new AudioId(value);
     }
 
-    public enum AudioPlaybackState { Loading, Playing, Paused, Finished }
-    public enum AudioCompletion { None, Completed, Stopped, Cancelled, Failed, Rejected }
-    public enum AudioConcurrencyPolicy { RejectNew, StealOldest }
-    public enum AudioFallbackPolicy { PreferAvailable, PrimaryThenBackup }
+    public enum AudioPlaybackState
+    {
+        Loading,
+        Playing,
+        Paused,
+        Finished
+    }
+
+    public enum AudioCompletion
+    {
+        None,
+        Completed,
+        Stopped,
+        Cancelled,
+        Failed,
+        Rejected
+    }
+
+    public enum AudioConcurrencyPolicy
+    {
+        RejectNew,
+        StealOldest
+    }
+
+    public enum AudioFallbackPolicy
+    {
+        PreferAvailable,
+        PrimaryThenBackup
+    }
 
     [Serializable]
     public sealed class PlayOptions
@@ -44,10 +75,12 @@ namespace Controller.Audio
         public PlaybackOptions(PlayOptions source, bool forceLoop = false)
         {
             Loop = forceLoop || (source?.Loop ?? false);
-            Volume = AudioValues.Unit(source?.Volume ?? 1f); Pitch = AudioValues.Pitch(source?.Pitch ?? 1f);
+            Volume = AudioValues.Unit(source?.Volume ?? 1f);
+            Pitch = AudioValues.Pitch(source?.Pitch ?? 1f);
             FadeInSeconds = AudioValues.Seconds(source?.FadeInSeconds ?? 0f);
             FadeOutSeconds = AudioValues.Seconds(source?.FadeOutSeconds ?? 0f);
-            IgnoreGamePause = source?.IgnoreGamePause ?? false; AllowAsyncLoad = source?.AllowAsyncLoad ?? true;
+            IgnoreGamePause = source?.IgnoreGamePause ?? false;
+            AllowAsyncLoad = source?.AllowAsyncLoad ?? true;
         }
     }
 
@@ -55,7 +88,7 @@ namespace Controller.Audio
     {
         private Action<AudioHandle> completed;
         internal AudioPlaybackEngine Owner;
-        internal object Playback;
+        internal AudioPlaybackEngine.Playback Playback;
         internal bool UserPaused;
         public long Id { get; internal set; }
         public AudioId AudioId { get; internal set; }
@@ -65,33 +98,71 @@ namespace Controller.Audio
         public string FailureReason { get; private set; }
         public bool IsValid => Owner != null && State != AudioPlaybackState.Finished;
         public bool IsFinished => State == AudioPlaybackState.Finished;
+
         // A late subscription is immediately called with the retained terminal result.
         public event Action<AudioHandle> Completed
         {
-            add { if (value == null) return; if (IsFinished) Invoke(value); else completed += value; }
-            remove { completed -= value; }
+            add
+            {
+                if (value == null)
+                    return;
+                if (IsFinished)
+                    Invoke(value);
+                else
+                    completed += value;
+            }
+
+            remove
+            {
+                completed -= value;
+            }
         }
+
         public bool Stop(float fadeOutSeconds = 0f) => Owner != null && Owner.Stop(this, AudioValues.Seconds(fadeOutSeconds));
         public bool Pause() => Owner != null && Owner.Pause(this, true);
         public bool Resume() => Owner != null && Owner.Pause(this, false);
         internal void Finish(AudioCompletion result, string reason = null)
         {
-            if (IsFinished) return;
+            if (IsFinished)
+                return;
             var owner = Owner;
-            State = AudioPlaybackState.Finished; Result = result; FailureReason = reason; Owner = null; Playback = null;
-            var subscribers = completed; completed = null;
-            if (subscribers == null) return;
+            State = AudioPlaybackState.Finished;
+            Result = result;
+            FailureReason = reason;
+            Owner = null;
+            Playback = null;
+            var subscribers = completed;
+            completed = null;
+            if (subscribers == null)
+                return;
             DispatchCompleted(owner, subscribers);
         }
+
         private void DispatchCompleted(AudioPlaybackEngine owner, Action<AudioHandle> subscribers)
         {
             // Keep the notification closure out of the common no-subscriber path.
-            void Notify() { foreach (Action<AudioHandle> callback in subscribers.GetInvocationList()) Invoke(callback); }
-            if (owner != null) owner.NotifyCompleted(Notify); else Notify();
+            void Notify()
+            {
+                foreach (Action<AudioHandle> callback in subscribers.GetInvocationList())
+                    Invoke(callback);
+            }
+
+            if (owner != null)
+                owner.NotifyCompleted(Notify);
+            else
+                Notify();
         }
+
         private void Invoke(Action<AudioHandle> callback)
         {
-            try { callback(this); } catch (Exception error) { Debug.LogException(error); }
+            try
+            {
+                callback(this);
+            }
+            catch (Exception error)
+            {
+                Debug.LogException(error);
+            }
         }
     }
 
@@ -110,7 +181,11 @@ namespace Controller.Audio
         public readonly float Volume, FadeGain;
         public readonly bool Muted;
         internal AudioChannelDiagnostics(float volume, float fadeGain, bool muted)
-        { Volume = volume; FadeGain = fadeGain; Muted = muted; }
+        {
+            Volume = volume;
+            FadeGain = fadeGain;
+            Muted = muted;
+        }
     }
 
     public readonly struct AudioDiagnostics
@@ -119,6 +194,19 @@ namespace Controller.Audio
         public readonly string LastFailure;
         public readonly bool GamePaused, BackgroundPaused;
         internal AudioDiagnostics(int playing, int paused, int loading, int pooled, int created, int cached, int users, int pending, string failure, int preparing = 0, bool gamePaused = false, bool backgroundPaused = false)
-        { Playing = playing; Paused = paused; Loading = loading; PooledSources = pooled; CreatedSources = created; CachedClips = cached; ClipUsers = users; PendingLoads = pending; LastFailure = failure; PreparingClips = preparing; GamePaused = gamePaused; BackgroundPaused = backgroundPaused; }
+        {
+            Playing = playing;
+            Paused = paused;
+            Loading = loading;
+            PooledSources = pooled;
+            CreatedSources = created;
+            CachedClips = cached;
+            ClipUsers = users;
+            PendingLoads = pending;
+            LastFailure = failure;
+            PreparingClips = preparing;
+            GamePaused = gamePaused;
+            BackgroundPaused = backgroundPaused;
+        }
     }
 }

@@ -62,9 +62,8 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 3277018820345294173}
-  - component: {fileID: 7715685650039812130}
   m_Layer: 0
-  m_Name: Bootstrap
+  m_Name: Dependencies
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -87,24 +86,6 @@ Transform:
   - {fileID: 5287616528313984198}
   m_Father: {fileID: 1096461206474296866}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &7715685650039812130
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5324041666618443824}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 357ff5e1ab79c1245b760428bde596e1, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Controller.Audio.AudioBootstrap
-  controllerOverride: {fileID: 0}
-  clipProviderSource: {fileID: 253465715346525094}
-  registerProviderGlobally: 1
-  settingsHandlerSource: {fileID: 8756048511660154438}
-  applyStoredVolumesOnStart: 1
-  broadcastStoredVolumesOnStart: 0
 --- !u!1 &5838804140289478701
 GameObject:
   m_ObjectHideFlags: 0
@@ -149,7 +130,9 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: eda8b5320b1136e4c98e80208a0418e5, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Controller.AudioController
+  m_EditorClassIdentifier: Controller.Audio::Controller.Audio.AudioController
+  clipProviderSource: {fileID: 253465715346525094}
+  settingsSource: {fileID: 8756048511660154438}
   mixer: {fileID: 24100000, guid: 3f35b6efe137c23448b1ee21bfdc970e, type: 2}
 --- !u!1 &6795073131762082835
 GameObject:
@@ -192,8 +175,10 @@ MonoBehaviour:
   m_GameObject: {fileID: 6795073131762082835}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: a599e4e0a988d2a4c89a64a4c52c46c1, type: 3}
+  m_Script: {fileID: 11500000, guid: 2f489a3f08bef544899a5d6b73d05b5b, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Controller.Audio.FallbackAudioClipProvider
-  mainProvider: {fileID: 0}
-  backupProvider: {fileID: 0}
+  m_EditorClassIdentifier: Controller.Audio::Controller.Audio.ResourcesAudioClipProvider
+  rootPath: Audio
+  bgmPath: BGM
+  sfxPath: SFX
+  voicePath: Voice

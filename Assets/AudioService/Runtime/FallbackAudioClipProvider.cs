@@ -1,61 +1,124 @@
 using System;
-using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Controller.Audio
 {
-    public class FallbackAudioClipProvider : MonoBehaviour, IResultAudioClipProvider, IAudioClipLeaseProvider, IAudioSynchronousClipProvider, IAudioClipProviderChanges, IAudioClipProviderRefresh
+    public class FallbackAudioClipProvider : MonoBehaviour, IAudioClipProvider, IAudioClipProviderChanges, IAudioClipProviderRefresh, IAudioClipProviderDiagnostics
     {
-        [SerializeField] private MonoBehaviour mainProvider;
-        [SerializeField] private MonoBehaviour backupProvider;
-        [SerializeField] private AudioFallbackPolicy policy = AudioFallbackPolicy.PreferAvailable;
+        [SerializeField]
+        private MonoBehaviour mainProvider;
+        [SerializeField]
+        private MonoBehaviour backupProvider;
+        [SerializeField]
+        private AudioFallbackPolicy policy;
         private IAudioClipProvider main, backup;
+        private bool configured;
         private int generation;
-        private readonly System.Collections.Generic.List<Action> cancellations = new();
+        private readonly List<Action> cancellations = new();
         private readonly AudioCallbackQueue callbacks = new();
+        private IAudioClipProvider Primary => configured ? main : mainProvider as IAudioClipProvider;
+        private IAudioClipProvider Secondary => configured ? backup : backupProvider as IAudioClipProvider;
+
         public event Action Changed;
         public AudioFallbackPolicy Policy
-        { get => policy; set { if (policy == value) return; policy = value; generation++; Changed?.Invoke(); } }
-        private void Awake()
         {
-            if (mainProvider == null) mainProvider = Ensure<AddressablesAudioClipProvider>("AddressablesProvider");
-            if (backupProvider == null) backupProvider = Ensure<ResourcesAudioClipProvider>("ResourcesProvider");
-            main = mainProvider as IAudioClipProvider; backup = backupProvider as IAudioClipProvider;
+            get => policy;
+            set
+            {
+                if (policy == value)
+                    return;
+                policy = value;
+                NotifyChanged();
+            }
         }
+
         public void Configure(IAudioClipProvider primary, IAudioClipProvider secondary, AudioFallbackPolicy selection)
-        { generation++; main = primary; backup = secondary; policy = selection; Changed?.Invoke(); }
-        internal string DescribeLookup(AudioClipAddress address, int depth)
-            => $"Fallback {policy}; primary [{AudioFailureLog.DescribeProvider(main, address, depth + 1)}]; backup [{AudioFailureLog.DescribeProvider(backup, address, depth + 1)}]";
-        private T Ensure<T>(string childName) where T : MonoBehaviour
         {
-            var child = transform.Find(childName);
-            if (child == null) { var go = new GameObject(childName); go.transform.SetParent(transform, false); child = go.transform; }
-            var component = child.GetComponent<T>(); return component != null ? component : child.gameObject.AddComponent<T>();
+            if (Contains(primary, this, new HashSet<IAudioClipProvider>()) || Contains(secondary, this, new HashSet<IAudioClipProvider>()))
+                throw new ArgumentException("Fallback providers must not form a cycle.");
+            Unsubscribe();
+            main = primary;
+            backup = secondary;
+            policy = selection;
+            configured = true;
+            if (isActiveAndEnabled)
+                Subscribe();
+            NotifyChanged();
         }
-        public AudioClip GetClip(AudioCategory category, string key) { TryGetClip(category, key, out var clip); return clip; }
-        private static bool Cached(IAudioClipProvider provider, AudioCategory category, string key, out AudioClip clip)
-        { clip = null; return AudioValues.Alive(provider) && provider is IAudioClipCache cache && cache.TryGetCachedClip(category, key, out clip); }
-        public bool TryGetCachedClip(AudioCategory category, string key, out AudioClip clip)
+
+        private static bool Contains(IAudioClipProvider provider, IAudioClipProvider target, HashSet<IAudioClipProvider> visited)
         {
-            if (Cached(main, category, key, out clip)) return true;
-            return policy == AudioFallbackPolicy.PreferAvailable && Cached(backup, category, key, out clip);
+            if (!AudioValues.Alive(provider))
+                return false;
+            if (ReferenceEquals(provider, target))
+                return true;
+            return visited.Add(provider) && provider is FallbackAudioClipProvider fallback && (Contains(fallback.Primary, target, visited) || Contains(fallback.Secondary, target, visited));
         }
-        public bool TryGetClip(AudioCategory category, string key, out AudioClip clip)
+
+        private void OnEnable()
         {
-            if (TryGetCachedClip(category, key, out clip)) return true;
-            return policy == AudioFallbackPolicy.PreferAvailable && AudioValues.Alive(backup) && backup.TryGetClip(category, key, out clip);
+            if (Contains(Primary, this, new HashSet<IAudioClipProvider>()) || Contains(Secondary, this, new HashSet<IAudioClipProvider>()))
+            {
+                Debug.LogError("[AudioService] Cyclic fallback configuration.", this);
+                main = backup = null;
+                configured = true;
+            }
+
+            Subscribe();
         }
-        public bool IsCached(AudioCategory category, string key) => TryGetCachedClip(category, key, out _);
-        public bool IsLoading(AudioCategory category, string key) =>
-            (AudioValues.Alive(main) && main is IAsyncAudioClipProvider a && a.IsLoading(category, key)) ||
-            (AudioValues.Alive(backup) && backup is IAsyncAudioClipProvider b && b.IsLoading(category, key));
-        public bool TryAcquireClip(AudioClipAddress address, out AudioClipLease lease)
+
+        private void Subscribe()
+        {
+            if (Primary is IAudioClipProviderChanges primary)
+                primary.Changed += NotifyChanged;
+            if (!ReferenceEquals(Primary, Secondary) && Secondary is IAudioClipProviderChanges secondary)
+                secondary.Changed += NotifyChanged;
+        }
+
+        private void Unsubscribe()
+        {
+            if (Primary is IAudioClipProviderChanges primary)
+                primary.Changed -= NotifyChanged;
+            if (!ReferenceEquals(Primary, Secondary) && Secondary is IAudioClipProviderChanges secondary)
+                secondary.Changed -= NotifyChanged;
+        }
+
+        private void NotifyChanged()
+        {
+            using var mutation = callbacks.Begin();
+            CancelPending();
+            AudioCallbacks.Invoke(Changed);
+        }
+
+        public bool TryGetCachedClip(ResolvedAudioClip address, out AudioClip clip)
+        {
+            clip = null;
+            if (AudioValues.Alive(Primary) && Primary.TryGetCachedClip(address, out clip))
+                return true;
+            return policy == AudioFallbackPolicy.PreferAvailable && AudioValues.Alive(Secondary) && Secondary.TryGetCachedClip(address, out clip);
+        }
+
+        public bool TryAcquireClip(ResolvedAudioClip address, out AudioClipLease lease)
+        {
+            if (TryAcquire(Primary, address, out lease))
+                return true;
+            return policy == AudioFallbackPolicy.PreferAvailable && TryAcquire(Secondary, address, out lease);
+        }
+
+        private static bool TryAcquire(IAudioClipProvider provider, ResolvedAudioClip address, out AudioClipLease lease)
         {
             lease = null;
-            if (AudioValues.Alive(main) && main is IAudioSynchronousClipProvider primary && primary.TryAcquireClip(address, out lease)) return true;
-            return policy == AudioFallbackPolicy.PreferAvailable && AudioValues.Alive(backup) && backup is IAudioSynchronousClipProvider secondary && secondary.TryAcquireClip(address, out lease);
+            if (!AudioValues.Alive(provider))
+                return false;
+            if (provider.TryAcquireClip(address, out lease) && lease?.Clip != null)
+                return true;
+            AudioCallbacks.Dispose(lease);
+            lease = null;
+            return false;
         }
-        public void AcquireClip(AudioClipAddress address, Action<AudioClipLease> completed)
+
+        public void AcquireClip(ResolvedAudioClip address, Action<AudioClipLease> completed)
         {
             using var mutation = callbacks.Begin();
             int version = generation;
@@ -65,71 +128,103 @@ namespace Controller.Audio
             void Finish(AudioClipLease lease)
             {
                 using var delivery = callbacks.Begin();
-                if (finished) { callbacks.Release(lease); return; }
+                if (finished)
+                {
+                    callbacks.Release(lease);
+                    return;
+                }
+
                 bool valid = Valid();
-                finished = true; cancellations.Remove(cancel);
-                if (!valid) { callbacks.Release(lease); lease = null; }
+                finished = true;
+                cancellations.Remove(cancel);
+                if (!valid)
+                {
+                    callbacks.Release(lease);
+                    lease = null;
+                }
+
                 callbacks.Enqueue(() => AudioCallbacks.Deliver(completed, lease));
             }
-            cancel = () => Finish(null); cancellations.Add(cancel);
-            void LoadMain()
+
+            cancel = () => Finish(null);
+            cancellations.Add(cancel);
+            try
             {
-                var primary = main;
+                if (policy == AudioFallbackPolicy.PreferAvailable && TryAcquireClip(address, out var immediate))
+                {
+                    Finish(immediate);
+                    return;
+                }
+
+                var primary = Primary;
+                var secondary = Secondary;
                 Acquire(primary, address, lease =>
                 {
-                    if (!AudioValues.Alive(primary)) { AudioCallbacks.Dispose(lease); lease = null; }
-                    if (!Valid()) Finish(lease);
-                    else if (lease?.Clip != null) Finish(lease);
-                    else { AudioCallbacks.Dispose(lease); Acquire(backup, address, Finish); }
+                    if (!AudioValues.Alive(primary))
+                    {
+                        AudioCallbacks.Dispose(lease);
+                        lease = null;
+                    }
+
+                    if (!Valid() || lease?.Clip != null)
+                        Finish(lease);
+                    else
+                    {
+                        AudioCallbacks.Dispose(lease);
+                        Acquire(secondary, address, Finish);
+                    }
                 });
             }
-            if (policy == AudioFallbackPolicy.PreferAvailable)
+            catch (Exception)
             {
-                if (Cached(main, address.Category, address.AddressablesKey ?? address.Id, out _)) { Acquire(main, address, Finish); return; }
-                // Resources.Load is an explicit load here, never disguised as a cache probe.
-                if (AudioValues.Alive(backup) && (backup is ResourcesAudioClipProvider || Cached(backup, address.Category, address.ResourcesKey ?? address.Id, out _)))
-                { Acquire(backup, address, lease => { if (lease?.Clip != null) Finish(lease); else { AudioCallbacks.Dispose(lease); if (Valid()) LoadMain(); else Finish(null); } }); return; }
+                Finish(null);
             }
-            LoadMain();
         }
-        private void Acquire(IAudioClipProvider provider, AudioClipAddress address, Action<AudioClipLease> completed)
+
+        private static void Acquire(IAudioClipProvider provider, ResolvedAudioClip address, Action<AudioClipLease> completed)
         {
-            if (!AudioValues.Alive(provider)) { completed(null); return; }
-            if (provider is IAudioClipLeaseProvider leases) leases.AcquireClip(address, completed);
-            else StartCoroutine(AudioAsync.AcquireLegacy(provider, address, completed));
+            if (!AudioValues.Alive(provider))
+            {
+                completed(null);
+                return;
+            }
+
+            try
+            {
+                provider.AcquireClip(address, completed);
+            }
+            catch (Exception)
+            {
+                completed(null);
+            }
         }
-        public IEnumerator LoadClipAsync(AudioCategory category, string key) { yield return LoadClipAsync(category, key, null); }
-        public IEnumerator LoadClipAsync(AudioCategory category, string key, Action<AudioClip> completed)
-        {
-            bool done = false; AudioClipLease lease = null;
-            AcquireClip(new AudioClipAddress(key, category), result => { lease = result; done = true; });
-            while (!done) yield return null;
-            // Legacy callers have no lease: retain through the provider's legacy load cache.
-            var clip = lease?.Clip;
-            if (clip != null && AudioValues.Alive(main) && main is IAsyncAudioClipProvider async && async.IsCached(category, key))
-                yield return async.LoadClipAsync(category, key);
-            try { AudioCallbacks.Invoke(completed, clip); }
-            finally { AudioCallbacks.Dispose(lease); }
-        }
-        public void ReleaseClip(AudioCategory category, string key)
-        {
-            if (AudioValues.Alive(main) && main is IAsyncAudioClipProvider a) a.ReleaseClip(category, key);
-            if (AudioValues.Alive(backup) && backup is IAsyncAudioClipProvider b) b.ReleaseClip(category, key);
-        }
+
         public void RefreshClipLookup()
         {
             using var mutation = callbacks.Begin();
             CancelPending();
-            if (AudioValues.Alive(main) && main is IAudioClipProviderRefresh primary) AudioCallbacks.Invoke(primary.RefreshClipLookup);
-            if (!ReferenceEquals(main, backup) && AudioValues.Alive(backup) && backup is IAudioClipProviderRefresh secondary) AudioCallbacks.Invoke(secondary.RefreshClipLookup);
+            if (AudioValues.Alive(Primary) && Primary is IAudioClipProviderRefresh primary)
+                AudioCallbacks.Invoke(primary.RefreshClipLookup);
+            if (!ReferenceEquals(Primary, Secondary) && AudioValues.Alive(Secondary) && Secondary is IAudioClipProviderRefresh secondary)
+                AudioCallbacks.Invoke(secondary.RefreshClipLookup);
         }
+
         private void CancelPending()
         {
             generation++;
-            var pending = cancellations.ToArray(); cancellations.Clear();
-            foreach (var cancel in pending) AudioCallbacks.Invoke(cancel);
+            var pending = cancellations.ToArray();
+            cancellations.Clear();
+            foreach (var cancel in pending)
+                AudioCallbacks.Invoke(cancel);
         }
-        private void OnDisable() { using var mutation = callbacks.Begin(); CancelPending(); }
-        private void OnDestroy() => OnDisable();
+
+        private void OnDisable()
+        {
+            using var mutation = callbacks.Begin();
+            Unsubscribe();
+            CancelPending();
+        }
+
+        public string DescribeLookup(ResolvedAudioClip address) => $"Fallback {policy}; primary [{AudioFailureLog.DescribeProvider(Primary, address)}]; backup [{AudioFailureLog.DescribeProvider(Secondary, address)}]";
     }
 }
