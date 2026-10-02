@@ -10,10 +10,10 @@ namespace Controller.Audio
         private const int Limit = 64;
         private readonly HashSet<(AudioCategory, string, string)> reported = new();
         private bool limitReported;
-        public void Report(AudioController controller, AudioHandle handle, string reason,
+        public void Report(AudioController controller, AudioCategory category, AudioId id, string reason,
             ResolvedAudioClip? address = null, bool allowAsync = true)
         {
-            var key = (handle.Category, handle.AudioId.Value, reason);
+            var key = (category, id.Value, reason);
             if (reported.Contains(key)) return;
             if (reported.Count == Limit)
             {
@@ -29,7 +29,7 @@ namespace Controller.Audio
                 : " Configured lookup: " + DescribeProvider(controller != null ? controller.ClipProvider : null, address.Value)
                   + ". Check the category, case-sensitive key and Catalog mapping. Resources keys omit the extension; Addressables keys must exist in the active catalog."
                   + (allowAsync ? string.Empty : " AllowAsyncLoad=false: Addressables must already be resident; Resources may load synchronously.");
-            Debug.LogWarning($"[AudioService] {handle.Category} '{handle.AudioId.Value}' failed: {reason}.{lookup}", controller);
+            Debug.LogWarning($"[AudioService] {category} '{id.Value}' failed: {reason}.{lookup}", controller);
         }
         internal static string DescribeProvider(IAudioClipProvider provider, ResolvedAudioClip address)
         {

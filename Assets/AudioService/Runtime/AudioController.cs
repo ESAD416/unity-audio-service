@@ -120,11 +120,14 @@ namespace Controller.Audio
                 MaxVoices = maxVoices,
                 ConcurrencyPolicy = concurrencyPolicy
             };
+            var current = engine;
             BindCatalog();
             if (!settingsConfigured)
                 MixerState.BindSettings(settingsSource as IAudioSettingsHandler, true, true);
             else
                 MixerState.AttachSettings();
+            if (!IsCurrentEngine(current))
+                return;
             AttachProviderNotifications();
             AttachAudioConfiguration();
         }
@@ -166,7 +169,8 @@ namespace Controller.Audio
 
         private void Update()
         {
-            if (!Ready)
+            var current = engine;
+            if (!Ready || current == null)
                 return;
             if (!MixerState.Applied)
             {
@@ -175,10 +179,19 @@ namespace Controller.Audio
             }
 
             if (clipProvider != null && !AudioValues.Alive(clipProvider))
+            {
                 SetClipProvider(null);
+                if (!IsCurrentEngine(current))
+                    return;
+            }
             SyncCatalog();
-            engine.Tick(Time.unscaledDeltaTime);
+            if (IsCurrentEngine(current))
+                current.Tick(Time.unscaledDeltaTime);
         }
+
+        // A callback may shut down and initialize again before the old call returns.
+        private bool IsCurrentEngine(AudioPlaybackEngine expected)
+            => Ready && expected != null && ReferenceEquals(engine, expected) && this != null && isActiveAndEnabled;
 
         private void AttachAudioConfiguration()
         {
@@ -259,27 +272,34 @@ namespace Controller.Audio
             providerSubscribed = false;
         }
 
-        private ResolvedAudioClip Resolve(AudioCategory category, AudioId id)
+        private bool TryResolve(AudioCategory category, AudioId id, out AudioPlaybackEngine current, out ResolvedAudioClip address)
         {
+            current = engine;
+            address = default;
+            if (!Ready || current == null)
+                return false;
             SyncCatalog();
-            return catalog != null && catalog.TryResolve(category, id, out var address) ? address : new ResolvedAudioClip(id.Value, category);
+            if (!IsCurrentEngine(current))
+                return false;
+            if (catalog == null || !catalog.TryResolve(category, id, out address))
+                address = new ResolvedAudioClip(id.Value, category);
+            return true;
         }
 
         internal AudioHandle Request(AudioCategory category, AudioId id, AudioClip clip, PlayOptions options, PlaybackSlot slot)
         {
-            if (!Ready || engine == null)
+            if (clip != null)
             {
-                var failed = new AudioHandle
-                {
-                    AudioId = id,
-                    Category = category
-                };
-                failed.Finish(AudioCompletion.Failed, "Audio service is not ready");
-                ReportPlaybackFailure(failed, "Audio service is not ready. Enable AudioCtrl.prefab and call playback from Start or later");
-                return failed;
+                if (Ready && engine != null)
+                    return engine.Play(category, null, clip, options, slot, id);
             }
+            else if (TryResolve(category, id, out var current, out var address))
+                return current.Play(category, address, null, options, slot, id);
 
-            return engine.Play(category, clip == null ? Resolve(category, id) : null, clip, options, slot, id);
+            var failed = new AudioHandle { AudioId = id, Category = category };
+            failed.Finish(AudioCompletion.Failed, "Audio service is not ready");
+            ReportPlaybackFailure(category, id, "Audio service is not ready. Enable AudioCtrl.prefab and call playback from Start or later");
+            return failed;
         }
 
         public AudioHandle Play(AudioCategory category, AudioId id, PlayOptions options = null) => Request(category, id, null, options, PlaybackSlot.None);
@@ -307,28 +327,22 @@ namespace Controller.Audio
         public int TrimIdleSources(int minimumCapacity = 0, int maxToRemove = 32) => Ready && engine != null ? engine.TrimIdleSources(minimumCapacity, maxToRemove) : 0;
         public void Preload(AudioCategory category, AudioId id, string group, Action<bool> completed = null)
         {
-            if (!CanPrepare(category, id, group))
-            {
+            if (CanPrepare(category, id, group) && TryResolve(category, id, out var current, out var address))
+                current.Preload(address, group, completed);
+            else
                 AudioCallbacks.Invoke(completed, false);
-                return;
-            }
-
-            engine.Preload(Resolve(category, id), group, completed);
         }
 
         /// <summary>Retain a clip until group release, completing when Unity reports its audio data loaded.</summary>
         public void PrepareClip(AudioCategory category, AudioId id, string group, Action<bool> completed = null)
         {
-            if (!CanPrepare(category, id, group))
-            {
+            if (CanPrepare(category, id, group) && TryResolve(category, id, out var current, out var address))
+                current.PrepareClip(address, group, completed);
+            else
                 AudioCallbacks.Invoke(completed, false);
-                return;
-            }
-
-            engine.PrepareClip(Resolve(category, id), group, completed);
         }
 
-        private bool CanPrepare(AudioCategory category, AudioId id, string group) => Ready && (int)category >= 0 && (int)category <= 2 && !string.IsNullOrWhiteSpace(group) && !string.IsNullOrWhiteSpace(id.Value);
+        private static bool CanPrepare(AudioCategory category, AudioId id, string group) => (int)category >= 0 && (int)category <= 2 && !string.IsNullOrWhiteSpace(group) && !string.IsNullOrWhiteSpace(id.Value);
         public void ReleaseGroup(string group)
         {
             if (!string.IsNullOrWhiteSpace(group))
@@ -339,7 +353,7 @@ namespace Controller.Audio
         public bool TryGetCachedClip(AudioCategory category, AudioId id, out AudioClip clip)
         {
             clip = null;
-            return Ready && engine.TryGetCached(Resolve(category, id), out clip);
+            return TryResolve(category, id, out var current, out var address) && current.TryGetCached(address, out clip);
         }
 
         public void BindSettings(IAudioSettingsHandler handler, bool applyStored = true)
@@ -388,10 +402,10 @@ namespace Controller.Audio
                 Debug.LogWarning("[AudioController] " + message, this);
         }
 
-        internal void ReportPlaybackFailure(AudioHandle handle, string reason, ResolvedAudioClip? address = null, bool allowAsync = true)
+        internal void ReportPlaybackFailure(AudioCategory category, AudioId id, string reason, ResolvedAudioClip? address = null, bool allowAsync = true)
         {
             if (logPlaybackFailures && (Application.isEditor || Debug.isDebugBuild))
-                (failureLog ??= new AudioFailureLog()).Report(this, handle, reason, address, allowAsync);
+                (failureLog ??= new AudioFailureLog()).Report(this, category, id, reason, address, allowAsync);
         }
     }
 }

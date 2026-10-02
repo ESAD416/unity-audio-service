@@ -82,6 +82,8 @@ Addressables catalog 更新成功後呼叫 `controller.RefreshClipProvider()`。
 
 素材 lease 的完成回呼是單一所有權交付，不是通知廣播。接收者缺省或拋例外時釋放該 lease；不要把同一 lease 交給多個獨立擁有者。Store 只為仍有效的等待者保留交付快照，全部取消時不配置快照；一旦整批 lease 已保留，回呼中的取消不撤回其他已承諾交付。
 
+Addressables 的已完成快取可直接交付 lease，不建立待載入 Request；TryAcquireClip 與回呼取得共用持有／釋放規則。一般交付仍保持同步順序，前一位接收者刷新來源時可取消同批尚未交付的等待者；刷新中的取消通知維持延後交付。這與 Store 先保留整批 lease 的契約不同，不可互換。
+
 Resources 只移除自身引用，不強制 UnloadAsset；外部所有者可能仍使用同一 clip。Addressables 依 resource location 合併 address／GUID 的 native operation，最後一份 lease／待派送持有離開後才 release。alias 索引不是額外的快取持有。
 
 ## 預載與持有
@@ -138,10 +140,14 @@ VolumeChanged 保留原本同步委派的例外傳遞語意，沒有套用上述
 
 Controller 的 Awake、重新啟用與 Reload 重接都走 Initialize。依賴由同一宿主管理，沒有全域 Provider 註冊或 Bootstrap 場景搜尋。Shutdown 先標記不可用，再取消／停止、退訂與釋放；其回呼期間不能重新初始化。重新啟用不復活舊 handle。
 
+初始化套用設定、Update 切換來源／同步 Catalog，以及播放／預載／準備／快取查詢解析 Catalog 時，都可能間接執行使用者回呼。若回呼關閉、停用、銷毀或重建 Controller，引擎實例身分檢查會中止舊流程：不重新掛回事件、不由舊 Update 推進新引擎，也不自動重試舊請求。解析途中失效的播放回傳 Failed handle，Preload／PrepareClip 回呼 false 一次，快取查詢回傳 false；新生命週期可正常接受後續獨立請求。
+
 AudioSettings.OnAudioConfigurationChanged 將已播放／暫停 handle 結束為 Failed，Loading 結束為 Cancelled；清除舊準備與素材快取、停止淡變，重套路由與音量。保留遊戲／背景暫停、靜音及分類增益，不自動續播 BGM。外部被音訊重設失效的 clip 由其擁有者重建。
 
 Diagnostics 提供播放、等待、準備、快取與池數量。CreatedSources 是**目前持有**的總來源數，非累計建立次數；縮池後會下降。快取與 CachedOperationCount 只計目前世代，舊播放仍可能持有舊 lease。GetChannelDiagnostics 的 Volume／FadeGain／Muted 是分開的控制值，不代表實際波形或可聽分貝。
 
 Editor Audio checks 提供唯讀場景 Listener、Mixer 與播放控制診斷，不載入素材、不自動修改狀態。Ready 不代表可聽見；實際音檔、Mixer 效果、OS／硬體輸出需另外驗收。
 
-目前環境、完整回歸與量測見 [改善計畫 §5.20](../unity-audio-service-improvement-plan.md#520-通知載入與準備責任精簡)。本機 Tests／Tools／work 維持 Git 忽略，不隨正式模組發布。
+服務未就緒的控制操作直接記錄診斷，不建立無人接收的失敗 handle；播放請求仍回傳完整失敗 handle。Editor／Development Build 限制、Log Playback Failures 開關、去重與 64 筆警告上限不變。
+
+目前環境、完整回歸與量測見 [改善計畫 §5.21](../unity-audio-service-improvement-plan.md#521-回呼邊界與素材取得精簡)。本機 Tests／Tools／work 維持 Git 忽略，不隨正式模組發布。

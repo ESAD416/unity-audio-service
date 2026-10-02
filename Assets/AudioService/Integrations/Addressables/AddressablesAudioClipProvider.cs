@@ -43,28 +43,32 @@ namespace Controller.Audio
 
         public bool TryGetCachedClip(ResolvedAudioClip address, out AudioClip clip)
         {
-            string key = address.AddressablesKey;
-            clip = null;
-            if (!destroyed && !string.IsNullOrWhiteSpace(key) && aliases.TryGetValue(key, out var op) && op.Complete && !op.Released)
-                clip = op.Clip;
+            clip = TryGetCompletedOperation(address.AddressablesKey, out var op) ? op.Clip : null;
             return clip != null;
+        }
+
+        private bool TryGetCompletedOperation(string key, out Operation op)
+        {
+            op = null;
+            return !destroyed && !string.IsNullOrWhiteSpace(key) && aliases.TryGetValue(key, out op)
+                && op.Complete && !op.Released && op.Clip != null;
         }
 
         public void AcquireClip(ResolvedAudioClip address, Action<AudioClipLease> completed) => Acquire(address.AddressablesKey, completed);
         public bool TryAcquireClip(ResolvedAudioClip address, out AudioClipLease lease)
         {
-            lease = null;
-            string key = address.AddressablesKey ?? address.Id;
-            if (!TryGetCachedClip(address, out var clip))
-                return false;
-            var op = aliases[key];
+            lease = TryGetCompletedOperation(address.AddressablesKey, out var op) ? CreateLease(op) : null;
+            return lease != null;
+        }
+
+        private AudioClipLease CreateLease(Operation op)
+        {
             op.Users++;
-            lease = new AudioClipLease(clip, () =>
+            return new AudioClipLease(op.Clip, () =>
             {
                 op.Users--;
                 ReleaseIfUnused(op);
             });
-            return true;
         }
 
         private void Acquire(string key, Action<AudioClipLease> completed)
@@ -73,6 +77,12 @@ namespace Controller.Audio
             if (destroyed || string.IsNullOrWhiteSpace(key))
             {
                 AudioCallbacks.Deliver(completed, null);
+                return;
+            }
+
+            if (TryGetCompletedOperation(key, out var completedOperation))
+            {
+                DeliverLease(completed, CreateLease(completedOperation));
                 return;
             }
 
@@ -95,7 +105,13 @@ namespace Controller.Audio
                 return;
             }
 
-            request.Locations = Addressables.LoadResourceLocationsAsync(key, typeof(AudioClip));
+            LoadLocation(request);
+        }
+
+        // Keep the asynchronous closure off completed-cache and known-location paths.
+        private void LoadLocation(Request request)
+        {
+            request.Locations = Addressables.LoadResourceLocationsAsync(request.Key, typeof(AudioClip));
             request.Locations.Completed += handle =>
             {
                 using var delivery = callbacks.Begin();
@@ -111,7 +127,7 @@ namespace Controller.Audio
                     return;
                 }
 
-                knownLocations[key] = location;
+                knownLocations[request.Key] = location;
                 Resolve(request, location);
             };
         }
@@ -225,24 +241,25 @@ namespace Controller.Audio
             requests.Remove(request);
             AudioClipLease lease = null;
             if (!destroyed && request.Generation == generation && op != null && !op.Released && op.Clip != null)
-            {
-                op.Users++;
-                lease = new AudioClipLease(op.Clip, () =>
-                {
-                    op.Users--;
-                    ReleaseIfUnused(op);
-                });
-            }
+                lease = CreateLease(op);
 
             var callback = request.Callback;
             request.Callback = null;
+            DeliverLease(callback, lease);
+        }
+
+        private void DeliverLease(Action<AudioClipLease> callback, AudioClipLease lease)
+        {
             // Ordinary delivery remains ordered and cancellable: an earlier
             // recipient may cancel a later waiter in this same native batch.
             if (lookupMutationDepth > 0)
-                callbacks.Enqueue(() => AudioCallbacks.Deliver(callback, lease));
+                DeferDelivery(callback, lease);
             else
                 AudioCallbacks.Deliver(callback, lease);
         }
+
+        private void DeferDelivery(Action<AudioClipLease> callback, AudioClipLease lease)
+            => callbacks.Enqueue(() => AudioCallbacks.Deliver(callback, lease));
 
         private void ReleaseIfUnused(Operation op)
         {

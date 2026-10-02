@@ -1,10 +1,10 @@
 # Unity Audio Service 改善與成熟化計劃
 
-文件日期：2026-10-01
+文件日期：2026-10-02
 
-文件版本：1.25
+文件版本：1.26
 
-狀態：完成通知／載入／準備責任精簡（見 5.20）；326 項 PlayMode、26 項 Editor／Reload、macOS Player 無圖形／批次 Metal 各 250 項通過。未安裝 Addressables 的獨立核心亦通過建置與播放／準備驗證；UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成回呼邊界、Addressables 取得與失敗診斷精簡（見 5.21）；367 項 PlayMode、26 項 Editor／Reload、macOS Player 無圖形／批次 Metal 各 288 項通過，Resources-only 獨立建置與播放／準備驗證通過。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1119,6 +1119,49 @@ Fallback 同步命中由每次 448 → 192 bytes；暖播放維持 192 bytes／2
 最終測試無失敗／跳過，C#／analyzer 建置 log 無錯誤或警告，也無無效 GUID 匯入訊息。正式模組相對本輪快照修改九檔、新增兩個內部類別與其 meta；69 個正式檔案與獨立驗證副本逐位元相同，原有 GUID 保留、無重複。57 個專案／套件／Addressables 設定及指定 URP 資產未變；四個建置生成的未追蹤檔移入本輪 generated 留存。`git diff --check` 通過，既有未提交變更保留，未提交或推送。
 
 快照、三項新測點 CSV、摘要、audit 與建置 log 位於 `work/lifecycle-simplification-20261001/`；Editor XML／log 為 `work/stage-two-hardening/lifecycle-*`，原有暖播放／持續負載 CSV 留在原 work 目錄並共用 label。重跑說明為 `Tools/AudioService/LIFECYCLE.md`；Tests／Tools／work 仍僅留本機。其他平台／Unity 版本、IL2CPP、人工操作／聽感及實際 UPM 安裝尚未驗證，不宣稱已消除全部技術債。
+
+### 5.21 回呼邊界與素材取得精簡
+
+記錄日期：2026-10-02。從乾淨的 `codex/audio-refactor`／`1389b64` 開始，先保存本輪快照並建立失敗測試及配置基準。維持公開 API、Prefab、序列化欄位與既有素材所有權契約，沒有新增管理元件或通用框架。
+
+**修正與收斂**
+
+- Controller 以原引擎實例辨識操作所屬生命週期；Update 在來源切換／Catalog 同步回呼後確認原引擎仍有效，再 Tick。初始化套用設定後同樣檢查，避免關閉後重新訂閱靜態音訊事件。TryResolve 共用解析及身分檢查，不在 `engine.Method(Resolve(...))` 中隱藏回呼邊界；失效時回傳各 API 既有失敗形式，不將舊請求派送或重試到新引擎。
+- 修改前實際重現 11 個失敗：Catalog／來源失效取消回呼中的 Shutdown、停用、銷毀造成 6 個空參考；Shutdown 後再 Initialize 造成 2 個舊 Update 推進新引擎的案例；初始化音量回呼中結束生命週期造成 3 個靜態事件殘留訂閱。16 個解析邊界案例原先已受舊引擎的失效保護，本輪明確移到 Controller 邊界，不能宣稱這 16 項也是新修復的錯誤。
+- Addressables 共用已完成操作查詢、CreateLease 與交付規則；快取命中不建立 Request。LoadLocation 與延後交付隔離各自閉包，避免暖命中仍配置未使用的定位／排隊狀態。保留世代、Users／Deliveries 計數、多 key 共用操作、刷新／銷毀後舊 lease 有效，以及同批稍後等待者仍可取消的時序。
+- AudioFailureLog 直接接收 category、ID、reason，不依賴 AudioHandle；停止、音量等控制失敗只記錄診斷。真正播放失敗仍回傳 handle，保留晚訂閱一次完成、文字、警告開關、開發版本限制、64 筆上限與重設規則。
+
+**同機量測與未採用方案**
+
+Unity 6000.6.3f1／Apple M4；同一份 CallbackBoundaryMeasurements，暖身後七次中位數、4,096-byte 校驗，所有 capture 的無效 metadata 為零。`boundaries-baseline` → `boundaries-final`：
+
+| 測點 | CPU，前 → 後 | 配置 bytes，前 → 後 |
+| --- | --- | --- |
+| 直接 Provider 已完成快取，1,024 次 callback acquire／Dispose | 0.4637 → 0.3355 ms | 327,680 → 196,608 |
+| 同一快取，1,024 次 TryAcquireClip／Dispose | 0.2900 → 0.2744 ms | 196,608 → 196,608 |
+| 1,024 次已去重的未就緒 StopSfx | 0.1832 → 0.1225 ms | 90,112 → 0 |
+| 既有暖快取 ID 播放 256 次 | 0.3973 → 0.3971 ms | 49,152 → 49,152 |
+| 既有暖批次停止 256 個播放 | 0.1470 → 0.1501 ms | 0 → 0 |
+
+Provider callback 暖命中由每次 320／5 事件降至 192 bytes／3 事件，仍建立 lease 及釋放委派；不可宣稱整體播放零配置或冷載入更快。控制測點只量暖身後、診斷已去重的路徑，不含首次字串／日誌成本。Provider 冷載入、失敗與取消以行為測試驗證，本輪沒有逐項量測其配置。既有播放測點及 1,800 幀持續替換測試保留；CPU 含探針及 Editor 干擾，數字不代表 Player 幀率。
+
+第四項快照重用曾實作並通過 104 項聚焦測試，但**未納入最終版本**。`boundaries-snapshots` 試作中，256 個播放的 100 次來源刷新由 227,200 → 19,200 bytes，但 CPU 0.1075 → 0.2362 ms，並保留 256 個參照槽；單次暖音訊重設由 2,248 → 168 bytes，CPU 0.1258 → 0.1361 ms。首次租借／容量增長仍需配置，更多借還控制流程與常駐容量對偶發操作的收益不足。最終保留來源刷新、音訊重設及 Shutdown 的 ToArray；已有分類停止的池化不變。試作量測保留，不把其配置下降算作最終交付收益。
+
+**驗證與證據**
+
+| 驗證 | 結果 |
+| --- | --- |
+| 修改前首次基準 | 34 項，26 通過／8 失敗；含三項新量測、既有播放量測及 30 個邊界案例 |
+| 初始化／快取補充基準 | 8 項，5 通過／3 失敗；新增四個快取契約測試在修改前已通過 |
+| 前三項聚焦回歸 | 144／144；回呼、來源、診斷、配置與既有播放行為 |
+| 最終完整 PlayMode | 367／367；原 326 項全部保留，另加 34 個 Controller／診斷案例、4 個 Addressables 回呼案例與 3 項量測 |
+| 專案 Editor／Reload | 26／26 |
+| macOS packed Player | 無圖形／批次 Metal 各 288／288；原 250 項全部保留，包含新增 38 個行為案例，兩版 content／Player 建置及 HTTP catalog 更新通過 |
+| 未安裝 Addressables 的獨立核心 | 核心／Editor／Samples 建置成功，adapter 未啟用；Prefab、播放、PrepareClip、暫停／恢復、替換、群組釋放與縮池 smoke 通過 |
+
+最終測試均無失敗／跳過，C#／analyzer 與 GUID 匯入檢查通過。正式程式只修改五檔，69 個正式檔案與獨立副本逐位元一致；原 GUID、57 個專案／套件／Addressables 設定及指定 URP 資產維持不變。四個本輪生成的未追蹤檔移入 `generated` 留存；`git diff --check` 通過，未提交或推送。
+
+本輪快照、三項測點 CSV、七次範圍與中位數摘要、audit 與 Player log 位於 `work/callback-boundaries-20261002/`；Editor XML／log 為 `work/stage-two-hardening/boundaries-*`，既有播放 CSV 在 `work/performance-refinement-20260930/boundaries-*`。重跑方式見 `Tools/AudioService/CALLBACK-BOUNDARIES.md`；Tests／Tools／work 繼續只留本機。其他平台／Unity 版本、IL2CPP、人工操作／聽感、真實硬體裝置切換與 UPM 安裝仍未驗收。
 
 ## 6. 第三階段：對外套件
 

@@ -1,5 +1,13 @@
 # 變更紀錄
 
+## Unreleased - 回呼邊界與素材取得精簡（2026-10-02）
+
+- Controller 在初始化設定回呼、Update 來源／Catalog 同步及 ID 解析後核對引擎實例，結束已失效的舊流程。修正 6 個空參考、2 個舊 Update 推進新引擎與 3 個初始化殘留訂閱案例；播放／預載／準備／快取查詢不自動跨生命週期重試。
+- Addressables 共用已完成操作查詢、lease 建立及交付規則；快取命中省去 Request 與未使用的定位／延後交付閉包。保留世代、持有計數、同批取消、alias 及刷新／銷毀後舊 lease 有效的契約。
+- 失敗診斷直接接收分類、ID 與原因；未就緒控制操作不再為警告建立丟棄的 handle。真正播放失敗、警告文字／去重／64 筆上限／開關／開發版本限制不變，公開 API、Prefab 與序列化欄位不變。
+- 同機 Editor：直接 Addressables callback 暖命中每次 320 → 192 bytes，已去重的未就緒控制警告 88 → 0 bytes；既有暖播放保持 192 bytes。來源刷新／音訊重設的池化快照試作雖減少配置，但 CPU、常駐容量與流程複雜度不划算，最終保留原快照；詳見改善計畫 §5.21。
+- PlayMode 367／367、Editor／Reload 26／26、macOS packed Player 無圖形／批次 Metal 各 288／288、Resources-only 獨立建置及播放／準備 smoke 通過。既有案例、GUID、專案設定與建置輸入保留；測試／工具僅留本機，人工聽感、其他平台及 IL2CPP 未驗收。
+
 ## Unreleased - 通知、載入與準備責任精簡（2026-10-01）
 
 - Catalog.Changed、Fallback.Changed 與 handle.Completed 共用逐訂閱者例外隔離，包含晚訂閱的多播委派；維持通知快照與同步時序。lease 交付仍為單一所有權，VolumeChanged 的例外語意及高頻路徑不改。

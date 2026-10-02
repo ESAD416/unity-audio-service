@@ -56,11 +56,15 @@ namespace Controller.Audio
         {
             var handle = new AudioHandle { Category = category, AudioId = id };
             handle.Finish(AudioCompletion.Failed, reason);
-            var controller = AudioController.Instance;
-            if (controller != null) controller.ReportPlaybackFailure(handle, reason);
-            else if (Application.isEditor || Debug.isDebugBuild)
-                (missingControllerLog ??= new AudioFailureLog()).Report(null, handle, reason);
+            ReportFailure(category, id, reason);
             return handle;
+        }
+        private static void ReportFailure(AudioCategory category, AudioId id, string reason)
+        {
+            var controller = AudioController.Instance;
+            if (controller != null) controller.ReportPlaybackFailure(category, id, reason);
+            else if (Application.isEditor || Debug.isDebugBuild)
+                (missingControllerLog ??= new AudioFailureLog()).Report(null, category, id, reason);
         }
         private static AudioController Controller
         {
@@ -68,7 +72,7 @@ namespace Controller.Audio
             {
                 var controller = AudioController.Instance;
                 if (controller != null && controller.Ready) return controller;
-                Failed(AudioCategory.Sfx, default, "Audio service is not ready. Enable AudioCtrl.prefab and call controls from Start or later.");
+                ReportFailure(AudioCategory.Sfx, default, "Audio service is not ready. Enable AudioCtrl.prefab and call controls from Start or later.");
                 return null;
             }
         }

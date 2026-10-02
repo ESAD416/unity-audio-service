@@ -447,7 +447,7 @@ namespace Controller.Audio
             handle.Finish(result, reason);
             host.ReportFailure(reason);
             if (result == AudioCompletion.Failed)
-                host.ReportPlaybackFailure(handle, reason);
+                host.ReportPlaybackFailure(handle.Category, handle.AudioId, reason);
         }
 
         private void Loaded(Playback playback, AudioClip clip, AudioClipLease lease = null, ResolvedAudioClip? address = null, AudioClipStore.Usage usage = default)
@@ -468,7 +468,7 @@ namespace Controller.Audio
                 AudioCallbacks.Dispose(lease);
                 string reason = "Clip load failed: " + playback.Handle.AudioId;
                 Finish(playback, AudioCompletion.Failed, reason);
-                host.ReportPlaybackFailure(playback.Handle, reason, address, playback.Options.AllowAsyncLoad);
+                host.ReportPlaybackFailure(playback.Handle.Category, playback.Handle.AudioId, reason, address, playback.Options.AllowAsyncLoad);
                 return;
             }
 
