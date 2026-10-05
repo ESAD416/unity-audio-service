@@ -26,7 +26,6 @@ namespace Controller.Audio
         [Header("Settings Handler")]
         [SerializeField] private MonoBehaviour settingsHandlerSource;
 
-        private IAudioSettingsHandler _settingsHandler;
         private AudioController preparedController;
         private AudioHandle preparedBgm;
         private string preparedGroup;
@@ -85,39 +84,23 @@ namespace Controller.Audio
 
         private bool TryGetSettingsHandler(out IAudioSettingsHandler handler)
         {
-            if (_settingsHandler != null)
-            {
-                handler = _settingsHandler;
+            handler = ResolveSettingsHandler();
+            if (handler != null)
                 return true;
-            }
 
-            if (settingsHandlerSource != null)
-            {
-                handler = settingsHandlerSource as IAudioSettingsHandler;
-                if (handler != null)
-                {
-                    _settingsHandler = handler;
-                    return true;
-                }
-
-                Debug.LogWarning("[AudioControllerDebugMenu] Settings handler source does not implement IAudioSettingsHandler.");
-            }
-
-            handler = null;
             Debug.LogWarning("[AudioControllerDebugMenu] Assign Settings Handler Source on this component.");
             return false;
         }
 
-        private void ResolveSettingsHandler()
+        private IAudioSettingsHandler ResolveSettingsHandler()
         {
-            if (settingsHandlerSource != null)
-            {
-                _settingsHandler = settingsHandlerSource as IAudioSettingsHandler;
-                if (_settingsHandler == null)
-                {
-                    Debug.LogWarning("[AudioControllerDebugMenu] Settings handler source does not implement IAudioSettingsHandler.");
-                }
-            }
+            if (settingsHandlerSource == null)
+                return null;
+            if (settingsHandlerSource is IAudioSettingsHandler handler)
+                return handler;
+
+            Debug.LogWarning("[AudioControllerDebugMenu] Settings handler source does not implement IAudioSettingsHandler.");
+            return null;
         }
 
         [ContextMenu("Audio/Play/BGM (Key)")]
