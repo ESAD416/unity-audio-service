@@ -1,10 +1,10 @@
 # Unity Audio Service 改善與成熟化計劃
 
-文件日期：2026-10-02
+文件日期：2026-10-05
 
-文件版本：1.26
+文件版本：1.28
 
-狀態：完成回呼邊界、Addressables 取得與失敗診斷精簡（見 5.21）；367 項 PlayMode、26 項 Editor／Reload、macOS Player 無圖形／批次 Metal 各 288 項通過，Resources-only 獨立建置與播放／準備驗證通過。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成設定來源、Tick 責任與 enum 防護整理，本輪聚焦 PlayMode 204／204、Editor／Reload 26／26 通過（見 5.23）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1163,6 +1163,44 @@ Provider callback 暖命中由每次 320／5 事件降至 192 bytes／3 事件�
 
 本輪快照、三項測點 CSV、七次範圍與中位數摘要、audit 與 Player log 位於 `work/callback-boundaries-20261002/`；Editor XML／log 為 `work/stage-two-hardening/boundaries-*`，既有播放 CSV 在 `work/performance-refinement-20260930/boundaries-*`。重跑方式見 `Tools/AudioService/CALLBACK-BOUNDARIES.md`；Tests／Tools／work 繼續只留本機。其他平台／Unity 版本、IL2CPP、人工操作／聽感、真實硬體裝置切換與 UPM 安裝仍未驗收。
 
+### 5.22 停止、暫停與固定映射整理
+
+記錄日期：2026-10-05。從乾淨的 `codex/audio-refactor`／`24bcd88` 開始，依架構審查建議完成三項局部整理，正式程式只修改 AudioPlaybackEngine、AudioSettingsPlayerPrefs、ResourcesAudioClipProvider。
+
+- StopPlayback 合併 Paused 與 `seconds <= 0` 的相同 Stopped 結果；Finished 防護及 Loading 優先回報 Cancelled 保留。
+- ApplyPause 在 Loading／Finished 防護後只計算一次暫停需求，相同狀態立即返回，再執行原生 Pause／UnPause 並更新 handle。個別、背景、遊戲、Listener 與 IgnoreGamePause 的合成規則不變。
+- PlayerPrefs key／預設音量、Resources 分類路徑及 GetSlot 改用 switch expression；保留 voice／null 預設分支及 `AudioValues.Unit(..., 1)`，沒有新增字典、委派或設定欄位。
+
+本輪不改使用步驟、公開 API、Prefab 或序列化欄位，收益為減少重複判斷及提高映射可讀性，不宣稱 CPU／配置改善。Tick 的拆分仍待獨立評估；Controller 引擎身分檢查、素材所有權、取消快照及回呼邊界保護保留。
+
+Unity 6000.6.3f1 本機聚焦 PlayMode **154／154 通過，失敗／跳過皆為零**。直接重用 AudioStateOptimizationTests、AudioSettingsTests、CorePlaybackTests、AudioUsabilityTests、PlaybackRefinementTests、AudioLifecycleRepairTests、CallbackBoundaryTests 七組既有測試，覆蓋停止、暫停、設定載入／重設、Resources 診斷、BGM／語音替換及回呼生命週期；未新增鏡像測試。編譯日誌沒有 C#／analyzer 警告或錯誤，33 個專案設定／套件／指定 URP 輸入雜湊未變，差異檢查通過，實際程式差異經 architect 審查無阻擋發現。
+
+XML／log 位於 `work/stage-two-hardening/conditional-cleanup-20261005.*`；輸入雜湊、摘要及兩個 Unity 生成檔位於 `work/conditional-cleanup-20261005/`，均僅留本機。重跑方式：`python3 Tools/AudioService/run-hardening.py PlayMode <新標籤> 'AudioStateOptimizationTests;AudioSettingsTests;CorePlaybackTests;AudioUsabilityTests;PlaybackRefinementTests;AudioLifecycleRepairTests;CallbackBoundaryTests'`。本輪未重跑完整 PlayMode、Editor／Reload、packed Player 或 Resources-only 獨立建置；前輪結果仍為歷史證據，人工聽感與其他平台的驗收界線不變。
+
+### 5.23 設定來源、Tick 責任與 enum 防護整理
+
+記錄日期：2026-10-05。依使用者核准完成三項局部修改，保留 §5.22 的未提交差異，未新增公開 API、序列化欄位或設定步驟。
+
+- Debug Menu 移除 `_settingsHandler` 快取，由 `ResolveSettingsHandler` 每次解析目前的 `settingsHandlerSource`；先用 MonoBehaviour 型別檢查 Unity 物件存活，再做介面 pattern matching。替換來源後使用新 handler，清空／銷毀來源後停止操作；Awake 未指定來源仍保持安靜，錯誤型別與操作時缺少來源的警告順序保留。修改前本機三項測試中的替換／銷毀案例失敗，這是來源失效問題，未將其描述為已重現 MissingReferenceException。
+- `AdvanceBusTweens` 回傳受影響分類 mask；`AdvanceTransition` 推進個別 Envelope 並處理完成動作。Tick 保留增益更新、重新讀取 Current、自然完成與 swap-remove 的索引判斷；tween 仍透過 ref 修改，Start／Finish 前清除舊 tween，避免清掉新轉場。素材持有、取消及回呼佇列不變。
+- `AudioValues.IsValidChannel`／`IsValidCategory` 用固定 enum 值 pattern 集中既有防護，套用至 Controller、MixerState、Catalog 驗證、播放接納與 PlayerPrefs 更新。只替換原有檢查；PlayerPrefs 仍先 EnsureLoaded，既有 Resources／播放槽預設分支不變。
+
+**本輪驗證：** Unity 6000.6.3f1 聚焦 PlayMode **204／204**、Editor／Reload **26／26** 通過，失敗／跳過皆為零。新增 8 項 Debug Menu 案例覆蓋來源替換／清空／銷毀及警告時序，新增 5 項流程案例覆蓋同 Tick 三個淡出回收、無效聲道不改設定／增益，以及無效分類不查 Provider（Preload／Prepare 的完成回呼合計兩次）。其餘沿用播放、暫停、準備、回呼重入與接納等既有案例。本輪未重跑完整 PlayMode、packed Player 或 Resources-only 獨立建置，前輪結果仍為歷史證據。
+
+**可讀性與 CPU 取捨：** 同機 Editor 執行修改前／後 `CorePerformanceMeasurements.GainUpdates`，池容量 24／256／1,024，各搭配 0／1／24 個使用中聲源，每組 7 次暖測量、每次 1,000 個操作。45 組測點的管理配置最大值在前後均為 0 bytes，兩次皆以 4,096 bytes 陣列配置探針校驗，實際均記錄 4,128 bytes／1 次配置。部分 CPU 測點增加，以下為容量 1,024、24 個使用中 Sfx 的中位數，單位 ms／1,000 次操作：
+
+| 測點 | 修改前 | 修改後 |
+| --- | ---: | ---: |
+| Master 分類淡變 | 1.2053 | 1.2558 |
+| Sfx 分類淡變 | 1.2223 | 1.2600 |
+| Voice 分類淡變 | 0.1750 | 0.2005 |
+| 閒置 Tick | 0.1539 | 0.1709 |
+| 切換靜音 | 1.3601 | 1.2972 |
+
+本次保留責任拆分以降低主迴圈的維護負擔，不宣稱全面加速；Editor 前後單次量測也不能證明所有差異均由 helper 呼叫造成。量測僅涵蓋增益更新與閒置 Tick，不延伸為所有個別轉場或裝置幀率的結論。
+
+33 個專案設定／套件／指定 URP 輸入雜湊未變，Prefab／GUID 未修改；`git diff --check` 通過，最終 architect 審查無阻擋發現。測試／工具／量測只留本機：XML／log 為 `work/stage-two-hardening/flow-cleanup-{final,editor}-20261005.*`，前後 CSV 為 `work/core-performance-20261001/flow-cleanup-{baseline,final}-20261005-gain.csv`；本輪快照、量測摘要、輸入核對及 Unity 生成檔留在 `work/flow-cleanup-20261005/`。程式碼整理為本機提交 `3ea904c`（停止／暫停與固定映射）、`1c985eb`（Debug Menu 設定來源）、`d47c287`（Tick 責任與 enum 防護），驗證文件另列一個提交；未推送。人工聽感、其他平台與 IL2CPP 的驗收界線不變。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1361,6 +1399,8 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成六項架構收斂、舊 API 遷移與可選 Addressables；285 項 PlayMode、24 項 Editor／Reload、209 項 macOS Player 兩模式及 Resources-only 獨立 Player 通過，取捨及界線見 §5.18。
 - [x] 完成 Catalog 共用解析資料、服務／來源刷新分離與單一交付快照；301 項 PlayMode、25 項 Editor、Player 兩模式各 228 項及 Resources-only 獨立驗證通過，含無 alias 的成本取捨，見 §5.19。
 - [x] 完成通知隔離、同步／取消路徑、PrepareClip 責任拆分及共用 Mixer 定義；326 項 PlayMode、26 項 Editor、Player 兩模式各 250 項及獨立 Resources-only 驗證通過，見 §5.20。
+- [x] 完成停止相同結果合併、暫停狀態切換及固定映射 switch 整理；本輪七組聚焦 PlayMode 154／154 通過，見 §5.22。
+- [x] 完成 Debug Menu 設定來源修正、Tick 責任拆分與 enum 防護集中；聚焦 PlayMode 204／204、Editor／Reload 26／26 通過，CPU 取捨見 §5.23。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1405,3 +1445,5 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.23 | 2026-10-01 | 依核准完成播放／Provider／初始化／可選依賴／Catalog／範例測試六項重構；補破壞性 API 遷移、285 項 PlayMode、24 項 Editor、Player 兩模式各 209 項及未安裝 Addressables 的獨立建置，記錄效能與 Catalog 記憶體取捨，見 §5.18 |
 | 1.24 | 2026-10-01 | 精簡 Catalog 索引與素材交付、區分映射及來源刷新、合併診斷掃描與停止入口；301 項 PlayMode、25 項 Editor、Player 兩模式各 228 項及 Resources-only 驗證通過，保留無 alias 的額外成本與測點界線，見 §5.19 |
 | 1.25 | 2026-10-01 | 統一 Changed／Completed 通知隔離、減少同步與取消交付配置、拆出 PrepareClip 並共用 Mixer 定義；326 項 PlayMode、26 項 Editor、Player 兩模式各 250 項及獨立 Resources-only 通過；含測試發現修正、CPU 取捨及適用邊界，見 §5.20 |
+| 1.27 | 2026-10-05 | 合併停止分支、以一次暫停需求判斷控制狀態切換、固定映射改用 switch；七組聚焦 PlayMode 154／154 通過，保持 API／序列化及既有生命週期契約，見 §5.22 |
+| 1.28 | 2026-10-05 | 修正 Debug Menu 過時設定來源、拆出 Tick 淡變／轉場責任、集中既有 enum 防護；聚焦 PlayMode 204／204、Editor／Reload 26／26 通過，記錄零管理配置測點與部分 CPU 增加，見 §5.23 |
