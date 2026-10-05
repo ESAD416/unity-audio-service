@@ -89,7 +89,12 @@ namespace Controller.Audio
 
         private string BuildPath(AudioCategory category, string key)
         {
-            string folder = category == AudioCategory.Bgm ? bgmPath : category == AudioCategory.Sfx ? sfxPath : voicePath;
+            string folder = category switch
+            {
+                AudioCategory.Bgm => bgmPath,
+                AudioCategory.Sfx => sfxPath,
+                _ => voicePath
+            };
             return string.IsNullOrEmpty(folder) ? $"{rootPath}/{key}" : $"{rootPath}/{folder}/{key}";
         }
     }

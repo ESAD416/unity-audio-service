@@ -32,8 +32,20 @@ namespace Controller.Audio
         public float SfxVolume { get { EnsureLoaded(); return values[2]; } }
         public float VoiceVolume { get { EnsureLoaded(); return values[3]; } }
         public int SaveCount { get; private set; }
-        private string Key(int index) => index == 0 ? masterKey : index == 1 ? bgmKey : index == 2 ? sfxKey : voiceKey;
-        private float Default(int index) => AudioValues.Unit(index == 0 ? defaultMaster : index == 1 ? defaultBgm : index == 2 ? defaultSfx : defaultVoice, 1);
+        private string Key(int index) => index switch
+        {
+            0 => masterKey,
+            1 => bgmKey,
+            2 => sfxKey,
+            _ => voiceKey
+        };
+        private float Default(int index) => AudioValues.Unit(index switch
+        {
+            0 => defaultMaster,
+            1 => defaultBgm,
+            2 => defaultSfx,
+            _ => defaultVoice
+        }, 1);
         private void Awake() => EnsureLoaded();
         private void EnsureLoaded() { if (!loaded) Reload(); }
         public void Reload()

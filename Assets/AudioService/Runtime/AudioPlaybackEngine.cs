@@ -80,7 +80,12 @@ namespace Controller.Audio
         private readonly Stack<Emitter> pool = new();
         private readonly SlotState bgm = new();
         private readonly SlotState dialogue = new();
-        private SlotState GetSlot(PlaybackSlot slot) => slot == PlaybackSlot.Bgm ? bgm : slot == PlaybackSlot.Dialogue ? dialogue : null;
+        private SlotState GetSlot(PlaybackSlot slot) => slot switch
+        {
+            PlaybackSlot.Bgm => bgm,
+            PlaybackSlot.Dialogue => dialogue,
+            _ => null
+        };
         private readonly float[] busGains =
         {
             1,
@@ -613,9 +618,7 @@ namespace Controller.Audio
                 return;
             if (p.Handle.State == AudioPlaybackState.Loading)
                 Finish(p, AudioCompletion.Cancelled);
-            else if (p.Handle.State == AudioPlaybackState.Paused)
-                Finish(p, AudioCompletion.Stopped);
-            else if (seconds <= 0)
+            else if (p.Handle.State == AudioPlaybackState.Paused || seconds <= 0)
                 Finish(p, AudioCompletion.Stopped);
             else
                 p.Emitter.Transition = new Tween
@@ -654,16 +657,14 @@ namespace Controller.Audio
         {
             if (p.Handle.State == AudioPlaybackState.Loading || p.Handle.IsFinished)
                 return;
-            if (Paused(p) && p.Handle.State != AudioPlaybackState.Paused)
-            {
+            bool shouldPause = Paused(p);
+            if (shouldPause == (p.Handle.State == AudioPlaybackState.Paused))
+                return;
+            if (shouldPause)
                 p.Emitter.Source.Pause();
-                p.Handle.State = AudioPlaybackState.Paused;
-            }
-            else if (!Paused(p) && p.Handle.State == AudioPlaybackState.Paused)
-            {
+            else
                 p.Emitter.Source.UnPause();
-                p.Handle.State = AudioPlaybackState.Playing;
-            }
+            p.Handle.State = shouldPause ? AudioPlaybackState.Paused : AudioPlaybackState.Playing;
         }
 
         public void SetPaused(bool paused, bool background = false)
