@@ -330,7 +330,7 @@ namespace Controller.Audio
                 Category = category,
                 Owner = this
             };
-            if (disposed || !host.Ready || (int)category < 0 || (int)category > 2 || (direct == null && string.IsNullOrWhiteSpace(key)))
+            if (disposed || !host.Ready || !AudioValues.IsValidCategory(category) || (direct == null && string.IsNullOrWhiteSpace(key)))
             {
                 Reject(handle, AudioCompletion.Failed, "Service unavailable or empty audio id/clip");
                 return handle;
@@ -766,6 +766,50 @@ namespace Controller.Audio
                     ApplyGain(emitter);
         }
 
+        private int AdvanceBusTweens(float delta)
+        {
+            int changedCategories = 0;
+            for (int i = 0; i < busTweens.Length; i++)
+            {
+                ref var tween = ref busTweens[i];
+                if (!tween.Active)
+                    continue;
+                changedCategories |= ChannelMask((AudioChannel)i);
+                busGains[i] = tween.Advance(delta);
+                if (tween.Done)
+                    tween = default;
+            }
+
+            return changedCategories;
+        }
+
+        private bool AdvanceTransition(Emitter emitter, float delta)
+        {
+            var current = emitter.Current;
+            if (!emitter.Transition.Active || (current != null && Paused(current)))
+                return false;
+
+            ref var tween = ref emitter.Transition;
+            emitter.Envelope = tween.Advance(delta);
+            if (!tween.Done)
+                return true;
+
+            var completion = tween.Completion;
+            var target = tween.Playback;
+            tween = default;
+            switch (completion)
+            {
+                case TweenCompletion.StartPending:
+                    Start(target);
+                    break;
+                case TweenCompletion.Stop when ReferenceEquals(emitter.Current, target):
+                    Finish(target, AudioCompletion.Stopped);
+                    break;
+            }
+
+            return true;
+        }
+
         public void Tick(float delta)
         {
             using var mutation = callbacks.Begin();
@@ -773,44 +817,17 @@ namespace Controller.Audio
                 return;
             SyncListenerPause();
             preparations.Tick();
-            int changedCategories = 0;
-            for (int i = 0; i < 4; i++)
-                if (busTweens[i].Active)
-                {
-                    changedCategories |= ChannelMask((AudioChannel)i);
-                    ref var t = ref busTweens[i];
-                    busGains[i] = t.Advance(delta);
-                    if (t.Done)
-                        t = default;
-                }
-
+            int changedCategories = AdvanceBusTweens(delta);
             bool gainsChanged = changedCategories != 0;
             int iSource = 0;
             while (iSource < updating.Count)
             {
                 var emitter = updating[iSource];
-                var p = emitter.Current;
-                bool envelopeChanged = false;
-                if (emitter.Transition.Active && (p == null || !Paused(p)))
-                {
-                    envelopeChanged = true;
-                    ref var tween = ref emitter.Transition;
-                    emitter.Envelope = tween.Advance(delta);
-                    if (tween.Done)
-                    {
-                        var completion = tween.Completion;
-                        var target = tween.Playback;
-                        tween = default;
-                        if (completion == TweenCompletion.StartPending)
-                            Start(target);
-                        else if (completion == TweenCompletion.Stop && ReferenceEquals(emitter.Current, target))
-                            Finish(target, AudioCompletion.Stopped);
-                    }
-                }
+                bool envelopeChanged = AdvanceTransition(emitter, delta);
 
                 if (envelopeChanged || (gainsChanged && NeedsGain(emitter, changedCategories)))
                     ApplyGain(emitter);
-                p = emitter.Current;
+                var p = emitter.Current;
                 if (p != null && p.Handle.State == AudioPlaybackState.Playing && !p.Options.Loop && Time.frameCount > p.StartedFrame + 1 && !emitter.Source.isPlaying)
                     Finish(p, AudioCompletion.Completed);
                 // Recycle swaps the last active emitter into this position.

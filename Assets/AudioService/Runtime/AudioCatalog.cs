@@ -168,7 +168,7 @@ namespace Controller.Audio
                     continue;
                 }
 
-                if ((int)entry.Category < 0 || (int)entry.Category > 2)
+                if (!AudioValues.IsValidCategory(entry.Category))
                     issues.Add($"Entries[{i}]: invalid Category.");
                 CheckKey(entry.Id, "Id", i, entry.Category);
                 if (entry.Aliases != null)

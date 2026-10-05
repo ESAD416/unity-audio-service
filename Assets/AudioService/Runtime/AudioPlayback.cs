@@ -157,6 +157,10 @@ namespace Controller.Audio
         public static float Seconds(float value) => float.IsNaN(value) || float.IsInfinity(value) ? 0f : Mathf.Max(0f, value);
         public static float Pitch(float value) => float.IsNaN(value) || float.IsInfinity(value) ? 1f : Mathf.Clamp(value, .01f, 3f);
         public static float Decibels(float value) => Mathf.Max(-80f, 20f * Mathf.Log10(Mathf.Max(.0001f, Unit(value))));
+        internal static bool IsValidChannel(AudioChannel channel)
+            => channel is AudioChannel.Master or AudioChannel.Bgm or AudioChannel.Sfx or AudioChannel.Voice;
+        internal static bool IsValidCategory(AudioCategory category)
+            => category is AudioCategory.Bgm or AudioCategory.Sfx or AudioCategory.Voice;
         internal static bool Alive(object value) => value != null && (!(value is UnityEngine.Object obj) || obj != null);
     }
 

@@ -55,7 +55,9 @@ namespace Controller.Audio
         }
         public void UpdateVolume(AudioChannel channel, float normalizedVolume)
         {
-            EnsureLoaded(); int index = (int)channel; if (index < 0 || index > 3) return;
+            EnsureLoaded();
+            if (!AudioValues.IsValidChannel(channel)) return;
+            int index = (int)channel;
             var value = AudioValues.Unit(normalizedVolume);
             if (values[index] == value) return;
             values[index] = value; PlayerPrefs.SetFloat(Key(index), value);

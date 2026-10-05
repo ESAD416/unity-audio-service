@@ -309,7 +309,7 @@ namespace Controller.Audio
         public void StopVoice(float fadeOutSeconds = 0) => engine?.StopCategory(AudioCategory.Voice, AudioValues.Seconds(fadeOutSeconds));
         public void FadeBus(AudioChannel channel, float targetVolume, float seconds, bool stopAfter = false)
         {
-            if (Ready && (int)channel >= 0 && (int)channel < 4)
+            if (Ready && AudioValues.IsValidChannel(channel))
                 engine.FadeBus(channel, AudioValues.Unit(targetVolume), AudioValues.Seconds(seconds), stopAfter);
         }
 
@@ -317,7 +317,7 @@ namespace Controller.Audio
         public void SetBackgroundPaused(bool paused) => engine?.SetPaused(paused, true);
         public void SetMuted(AudioChannel channel, bool muted)
         {
-            if ((int)channel >= 0 && (int)channel < 4)
+            if (AudioValues.IsValidChannel(channel))
                 engine?.SetMuted(channel, muted);
         }
 
@@ -342,7 +342,8 @@ namespace Controller.Audio
                 AudioCallbacks.Invoke(completed, false);
         }
 
-        private static bool CanPrepare(AudioCategory category, AudioId id, string group) => (int)category >= 0 && (int)category <= 2 && !string.IsNullOrWhiteSpace(group) && !string.IsNullOrWhiteSpace(id.Value);
+        private static bool CanPrepare(AudioCategory category, AudioId id, string group)
+            => AudioValues.IsValidCategory(category) && !string.IsNullOrWhiteSpace(group) && !string.IsNullOrWhiteSpace(id.Value);
         public void ReleaseGroup(string group)
         {
             if (!string.IsNullOrWhiteSpace(group))
@@ -366,7 +367,7 @@ namespace Controller.Audio
         public float GetVolume(AudioChannel channel) => MixerState.GetVolume(channel);
         public AudioChannelDiagnostics GetChannelDiagnostics(AudioChannel channel)
         {
-            if ((int)channel < 0 || (int)channel >= 4)
+            if (!AudioValues.IsValidChannel(channel))
                 return default;
             return engine != null ? engine.GetChannelDiagnostics(channel, GetVolume(channel)) : new AudioChannelDiagnostics(GetVolume(channel), 1, false);
         }

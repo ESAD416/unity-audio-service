@@ -82,11 +82,11 @@ namespace Controller.Audio
         }
 
         private void SettingsChanged(AudioChannel channel, float value) => SetVolume(channel, value, false);
-        public float GetVolume(AudioChannel channel) => (int)channel >= 0 && (int)channel < 4 ? volumes[(int)channel] : 0;
+        public float GetVolume(AudioChannel channel) => AudioValues.IsValidChannel(channel) ? volumes[(int)channel] : 0;
         public void SetVolume(AudioChannel channel, float value, bool persist = true)
         {
             int index = (int)channel;
-            if (index < 0 || index > 3)
+            if (!AudioValues.IsValidChannel(channel))
                 return;
             bool previous = applyingSettings;
             applyingSettings |= !persist;
