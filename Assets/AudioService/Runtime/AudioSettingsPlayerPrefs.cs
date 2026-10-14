@@ -24,7 +24,7 @@ namespace Controller.Audio
         [Tooltip("Save after volume changes have been idle for the save delay. Volume changes take effect immediately.")]
         [SerializeField, FormerlySerializedAs("saveImmediately")] private bool autoSave;
         [SerializeField] private float saveDelaySeconds = .25f;
-        private readonly float[] values = new float[4];
+        private readonly float[] values = new float[AudioMixerLayout.ChannelCount];
         private bool loaded, dirty;
         private float flushAt;
         public event Action<AudioChannel, float> VolumeChanged;
@@ -33,18 +33,18 @@ namespace Controller.Audio
         public float SfxVolume => Stored(AudioChannel.Sfx);
         public float VoiceVolume => Stored(AudioChannel.Voice);
         public int SaveCount { get; private set; }
-        private string Key(int index) => index switch
+        private string Key(AudioChannel channel) => channel switch
         {
-            0 => masterKey,
-            1 => bgmKey,
-            2 => sfxKey,
+            AudioChannel.Master => masterKey,
+            AudioChannel.Bgm => bgmKey,
+            AudioChannel.Sfx => sfxKey,
             _ => voiceKey
         };
-        private float Default(int index) => AudioValues.Unit(index switch
+        private float Default(AudioChannel channel) => AudioValues.Unit(channel switch
         {
-            0 => defaultMaster,
-            1 => defaultBgm,
-            2 => defaultSfx,
+            AudioChannel.Master => defaultMaster,
+            AudioChannel.Bgm => defaultBgm,
+            AudioChannel.Sfx => defaultSfx,
             _ => defaultVoice
         }, 1);
 
@@ -63,8 +63,8 @@ namespace Controller.Audio
 
         public void Reload()
         {
-            for (int i = 0; i < values.Length; i++)
-                values[i] = AudioValues.Unit(PlayerPrefs.GetFloat(Key(i), Default(i)), Default(i));
+            foreach (var channel in AudioMixerLayout.Channels)
+                values[(int)channel] = AudioValues.Unit(PlayerPrefs.GetFloat(Key(channel), Default(channel)), Default(channel));
             loaded = true;
         }
 
@@ -78,7 +78,7 @@ namespace Controller.Audio
             if (values[index] == value)
                 return;
             values[index] = value;
-            PlayerPrefs.SetFloat(Key(index), value);
+            PlayerPrefs.SetFloat(Key(channel), value);
             MarkDirty();
             VolumeChanged?.Invoke(channel, value);
         }
@@ -113,8 +113,8 @@ namespace Controller.Audio
 
         public void ResetSettings()
         {
-            for (int i = 0; i < values.Length; i++)
-                PlayerPrefs.DeleteKey(Key(i));
+            foreach (var channel in AudioMixerLayout.Channels)
+                PlayerPrefs.DeleteKey(Key(channel));
             loaded = false;
             EnsureLoaded();
             MarkDirty();
@@ -124,8 +124,8 @@ namespace Controller.Audio
         public void BroadcastStoredVolumes()
         {
             EnsureLoaded();
-            for (int i = 0; i < values.Length; i++)
-                VolumeChanged?.Invoke((AudioChannel)i, values[i]);
+            foreach (var channel in AudioMixerLayout.Channels)
+                VolumeChanged?.Invoke(channel, values[(int)channel]);
         }
     }
 }
