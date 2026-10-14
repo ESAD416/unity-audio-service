@@ -131,21 +131,14 @@ namespace Controller.Audio
         private bool disposed, gamePaused, backgroundPaused, listenerPaused;
         private AudioClipStore store;
         private IAudioClipProvider provider;
-        private sealed class ExternalId
-        {
-            public AudioId Id;
-        }
-
-        private ConditionalWeakTable<AudioClip, ExternalId> externalIds;
-        private static readonly ConditionalWeakTable<AudioClip, ExternalId>.CreateValueCallback CreateExternalId = clip => new ExternalId
-        {
-            Id = new AudioId("external:" + clip.GetEntityId().ToString())
-        };
+        private ConditionalWeakTable<AudioClip, StrongBox<AudioId>> externalIds;
+        private static readonly ConditionalWeakTable<AudioClip, StrongBox<AudioId>>.CreateValueCallback CreateExternalId
+            = clip => new StrongBox<AudioId>(new AudioId("external:" + clip.GetEntityId().ToString()));
         private AudioId Identify(AudioClip clip)
         {
             // Cache by managed identity without extending the caller's clip lifetime.
-            externalIds ??= new ConditionalWeakTable<AudioClip, ExternalId>();
-            return externalIds.GetValue(clip, CreateExternalId).Id;
+            externalIds ??= new ConditionalWeakTable<AudioClip, StrongBox<AudioId>>();
+            return externalIds.GetValue(clip, CreateExternalId).Value;
         }
 
         public string LastFailure { get; private set; }
@@ -814,7 +807,7 @@ namespace Controller.Audio
                         playing++;
                 }
 
-                store.GetCounts(out int cached, out int users, out int pending);
+                var (cached, users, pending) = store.Counts();
                 return new AudioDiagnostics(playing, paused, loading, sources.IdleCount, sources.Count, cached, users, pending,
                     preparations.Count, LastFailure, gamePaused, backgroundPaused);
             }

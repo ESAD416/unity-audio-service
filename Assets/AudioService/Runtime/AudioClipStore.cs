@@ -52,16 +52,14 @@ namespace Controller.Audio
             }
         }
 
-        private static readonly Action NoCancellation = () =>
-        {
-        };
+        private static readonly Action NoCancellation = () => { };
         private readonly Dictionary<(AudioCategory, string), Entry> entries = new();
         private readonly IAudioClipProvider provider;
         private readonly AudioCallbackQueue callbacks;
         private bool disposed;
-        public void GetCounts(out int cached, out int users, out int loading)
+        public (int Cached, int Users, int Loading) Counts()
         {
-            cached = users = loading = 0;
+            int cached = 0, users = 0, loading = 0;
             foreach (var entry in entries.Values)
             {
                 if (entry.HasClip)
@@ -70,6 +68,8 @@ namespace Controller.Audio
                 if (entry.Loading)
                     loading++;
             }
+
+            return (cached, users, loading);
         }
 
         public AudioClipStore(IAudioClipProvider provider, AudioCallbackQueue callbacks)
