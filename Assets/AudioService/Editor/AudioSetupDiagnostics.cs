@@ -42,12 +42,26 @@ namespace Controller.Audio.Editor
                 CheckMixer(data.FindProperty("mixer").objectReferenceValue as AudioMixer, issues);
 
             // A prefab asset/stage is not the loaded game's listening environment.
-            if (EditorUtility.IsPersistent(controller) || !controller.gameObject.scene.IsValid()
-                || StageUtility.GetStageHandle(controller.gameObject) != StageUtility.GetMainStageHandle())
+            if (!IsInOpenScene(controller))
             {
                 issues.Add(new AudioSetupIssue("Scene output checks are available on an AudioCtrl instance in an open scene. A prefab does not need its own AudioListener.", MessageType.Info));
                 return issues;
             }
+            CheckScene(controller, issues);
+            if (Application.isPlaying)
+                CheckPlayModeControls(controller, issues);
+            return issues;
+        }
+
+        private static bool IsInOpenScene(AudioController controller)
+            => !EditorUtility.IsPersistent(controller) && controller.gameObject.scene.IsValid() && IsMainStage(controller.gameObject);
+
+        private static bool IsMainStage(GameObject gameObject)
+            => StageUtility.GetStageHandle(gameObject) == StageUtility.GetMainStageHandle();
+
+        // Where AudioCtrl sits, and whether exactly one listener hears the loaded scenes.
+        private static void CheckScene(AudioController controller, List<AudioSetupIssue> issues)
+        {
             if (!controller.isActiveAndEnabled)
                 issues.Add(new AudioSetupIssue("AudioCtrl is disabled. Enable its GameObject and AudioController component before playback.", MessageType.Warning, controller));
             if (controller.transform.parent != null)
@@ -56,8 +70,7 @@ namespace Controller.Audio.Editor
             int listeners = 0;
             AudioListener extra = null;
             foreach (var listener in Object.FindObjectsByType<AudioListener>(FindObjectsInactive.Exclude))
-                if (listener.isActiveAndEnabled && listener.gameObject.scene.isLoaded
-                    && StageUtility.GetStageHandle(listener.gameObject) == StageUtility.GetMainStageHandle())
+                if (listener.isActiveAndEnabled && listener.gameObject.scene.isLoaded && IsMainStage(listener.gameObject))
                 {
                     listeners++;
                     extra = listener;
@@ -66,12 +79,15 @@ namespace Controller.Audio.Editor
                 issues.Add(new AudioSetupIssue("No active AudioListener in the loaded scenes. Enable one on the gameplay camera (or another listening object).", MessageType.Warning));
             else if (listeners > 1)
                 issues.Add(new AudioSetupIssue($"{listeners} active AudioListeners in the loaded scenes. Keep one active listener, including when loading scenes additively.", MessageType.Warning, extra));
+        }
 
-            if (!Application.isPlaying) return issues;
+        // Play Mode states that silence output without being a setup error.
+        private static void CheckPlayModeControls(AudioController controller, List<AudioSetupIssue> issues)
+        {
             if (!controller.Ready)
             {
                 issues.Add(new AudioSetupIssue("Service is not ready. Enable AudioCtrl and call playback from Start or later.", MessageType.Warning, controller));
-                return issues;
+                return;
             }
             if (AudioListener.volume <= 0)
                 issues.Add(new AudioSetupIssue("AudioListener.volume is 0. Restore the listener volume in the code that changed it.", MessageType.Info));
@@ -93,7 +109,6 @@ namespace Controller.Audio.Editor
                 if (controls.FadeGain <= 0)
                     issues.Add(new AudioSetupIssue($"{name} FadeBus gain is 0. To restore it, call AudioService.FadeBus({argument}, 1f, seconds). This does not change saved volume.", MessageType.Info, controller));
             }
-            return issues;
         }
 
         private static void CheckMixer(AudioMixer mixer, List<AudioSetupIssue> issues)

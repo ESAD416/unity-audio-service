@@ -32,7 +32,8 @@ namespace Controller.Audio
         public float BgmVolume => Stored(AudioChannel.Bgm);
         public float SfxVolume => Stored(AudioChannel.Sfx);
         public float VoiceVolume => Stored(AudioChannel.Voice);
-        public int SaveCount { get; private set; }
+        // Number of PlayerPrefs.Save calls, for verifying that writes are batched.
+        internal int SaveCount { get; private set; }
         private string Key(AudioChannel channel) => channel switch
         {
             AudioChannel.Master => masterKey,

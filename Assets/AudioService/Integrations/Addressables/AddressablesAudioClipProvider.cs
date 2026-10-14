@@ -340,6 +340,7 @@ namespace Controller.Audio
             destroyed = true;
             foreach (var request in requests.ToArray())
                 CancelRequest(request);
+            // Outstanding leases deliberately retain the native handle after this component is destroyed.
             foreach (var op in new List<Operation>(operations.Values))
             {
                 RemoveAliases(op);
@@ -349,7 +350,6 @@ namespace Controller.Audio
             knownLocations.Clear();
             aliases.Clear();
             operations.Clear();
-        // Outstanding leases deliberately retain the native handle after this component is destroyed.
         }
 
         public string DescribeLookup(ResolvedAudioClip address) => string.IsNullOrWhiteSpace(address.AddressablesKey) ? "Addressables disabled (empty key)" : $"Addressables key='{address.AddressablesKey}'";
