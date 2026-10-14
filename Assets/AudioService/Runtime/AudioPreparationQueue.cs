@@ -27,41 +27,40 @@ namespace Controller.Audio
             using var mutation = callbacks.Begin();
             var preparation = new Preparation { Group = group, Completed = completed };
             pending.Add(preparation);
-            var cancel = store.Request(address, true, lease =>
-            {
-                using var delivery = callbacks.Begin();
-                if (preparation.Finished)
-                {
-                    AudioCallbacks.Dispose(lease);
-                    return;
-                }
-
-                preparation.CancelLoad = null;
-                preparation.Lease = lease;
-                if (lease?.Clip == null)
-                {
-                    Finish(preparation, false);
-                    return;
-                }
-
-                try
-                {
-                    if (lease.Clip.loadState == AudioDataLoadState.Unloaded && !lease.Clip.LoadAudioData())
-                    {
-                        Finish(preparation, false);
-                        return;
-                    }
-                    Check(preparation);
-                }
-                catch (Exception error)
-                {
-                    Debug.LogException(error);
-                    Finish(preparation, false);
-                }
-            }, group);
+            var cancel = store.Request(address, true, lease => Receive(preparation, lease), group);
             if (!preparation.Finished && preparation.Lease == null)
                 preparation.CancelLoad = cancel;
         }
+
+        // Keep the delivered lease and ask Unity for audio data that is not loaded yet;
+        // Check or a later Tick finishes once Unity reports the data loaded or failed.
+        private void Receive(Preparation preparation, AudioClipLease lease)
+        {
+            using var delivery = callbacks.Begin();
+            if (preparation.Finished)
+            {
+                AudioCallbacks.Dispose(lease);
+                return;
+            }
+
+            preparation.CancelLoad = null;
+            preparation.Lease = lease;
+            try
+            {
+                if (lease?.Clip == null || !RequestAudioData(lease.Clip))
+                    Finish(preparation, false);
+                else
+                    Check(preparation);
+            }
+            catch (Exception error)
+            {
+                Debug.LogException(error);
+                Finish(preparation, false);
+            }
+        }
+
+        private static bool RequestAudioData(AudioClip clip)
+            => clip.loadState != AudioDataLoadState.Unloaded || clip.LoadAudioData();
 
         public void Tick()
         {

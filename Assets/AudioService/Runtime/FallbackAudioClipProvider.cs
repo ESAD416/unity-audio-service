@@ -19,6 +19,8 @@ namespace Controller.Audio
         private readonly AudioCallbackQueue callbacks = new();
         private IAudioClipProvider Primary => configured ? main : mainProvider as IAudioClipProvider;
         private IAudioClipProvider Secondary => configured ? backup : backupProvider as IAudioClipProvider;
+        // The backup is skipped when it is the same provider as the primary.
+        private IAudioClipProvider DistinctSecondary => ReferenceEquals(Primary, Secondary) ? null : Secondary;
 
         public event Action Changed;
         public AudioFallbackPolicy Policy
@@ -35,7 +37,7 @@ namespace Controller.Audio
 
         public void Configure(IAudioClipProvider primary, IAudioClipProvider secondary, AudioFallbackPolicy selection)
         {
-            if (Contains(primary, this, new HashSet<IAudioClipProvider>()) || Contains(secondary, this, new HashSet<IAudioClipProvider>()))
+            if (FormsCycle(primary, secondary))
                 throw new ArgumentException("Fallback providers must not form a cycle.");
             Unsubscribe();
             main = primary;
@@ -46,6 +48,10 @@ namespace Controller.Audio
                 Subscribe();
             NotifyChanged();
         }
+
+        // A fallback must not reach itself through its own sources.
+        private bool FormsCycle(IAudioClipProvider primary, IAudioClipProvider secondary)
+            => Contains(primary, this, new HashSet<IAudioClipProvider>()) || Contains(secondary, this, new HashSet<IAudioClipProvider>());
 
         private static bool Contains(IAudioClipProvider provider, IAudioClipProvider target, HashSet<IAudioClipProvider> visited)
         {
@@ -58,7 +64,7 @@ namespace Controller.Audio
 
         private void OnEnable()
         {
-            if (Contains(Primary, this, new HashSet<IAudioClipProvider>()) || Contains(Secondary, this, new HashSet<IAudioClipProvider>()))
+            if (FormsCycle(Primary, Secondary))
             {
                 Debug.LogError("[AudioService] Cyclic fallback configuration.", this);
                 main = backup = null;
@@ -72,7 +78,7 @@ namespace Controller.Audio
         {
             if (Primary is IAudioClipProviderChanges primary)
                 primary.Changed += NotifyChanged;
-            if (!ReferenceEquals(Primary, Secondary) && Secondary is IAudioClipProviderChanges secondary)
+            if (DistinctSecondary is IAudioClipProviderChanges secondary)
                 secondary.Changed += NotifyChanged;
         }
 
@@ -80,7 +86,7 @@ namespace Controller.Audio
         {
             if (Primary is IAudioClipProviderChanges primary)
                 primary.Changed -= NotifyChanged;
-            if (!ReferenceEquals(Primary, Secondary) && Secondary is IAudioClipProviderChanges secondary)
+            if (DistinctSecondary is IAudioClipProviderChanges secondary)
                 secondary.Changed -= NotifyChanged;
         }
 
@@ -125,7 +131,7 @@ namespace Controller.Audio
             if (policy == AudioFallbackPolicy.PreferAvailable)
             {
                 AudioClipLease immediate = null;
-                bool acquired;
+                bool acquired = false, threw = false;
                 try
                 {
                     acquired = TryAcquireClip(address, out immediate);
@@ -133,13 +139,12 @@ namespace Controller.Audio
                 catch (Exception error)
                 {
                     Debug.LogException(error);
-                    callbacks.Release(immediate);
-                    Deliver(completed, null);
-                    return;
+                    threw = true;
                 }
 
-                // A synchronous provider can reconfigure or disable this owner.
-                if (!IsCurrent(version))
+                // A throwing provider, or one that reconfigured or disabled this owner, abandons
+                // the request; a lease it assigned before that is still released.
+                if (threw || !IsCurrent(version))
                 {
                     callbacks.Release(immediate);
                     Deliver(completed, null);
@@ -238,9 +243,9 @@ namespace Controller.Audio
         {
             using var mutation = callbacks.Begin();
             CancelPending();
-            if (AudioValues.Alive(Primary) && Primary is IAudioClipProviderRefresh primary)
+            if (Primary is IAudioClipProviderRefresh primary && AudioValues.Alive(primary))
                 AudioCallbacks.Invoke(primary.RefreshClipLookup);
-            if (!ReferenceEquals(Primary, Secondary) && AudioValues.Alive(Secondary) && Secondary is IAudioClipProviderRefresh secondary)
+            if (DistinctSecondary is IAudioClipProviderRefresh secondary && AudioValues.Alive(secondary))
                 AudioCallbacks.Invoke(secondary.RefreshClipLookup);
         }
 

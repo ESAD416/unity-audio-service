@@ -34,11 +34,17 @@ namespace Controller.Audio
                 return;
             }
             reported.Add(key);
-            string lookup = address == null ? string.Empty
-                : " Configured lookup: " + DescribeProvider(controller != null ? controller.ClipProvider : null, address.Value)
-                  + ". Check the category, case-sensitive key and Catalog mapping. Resources keys omit the extension; Addressables keys must exist in the active catalog."
-                  + (allowAsync ? string.Empty : " AllowAsyncLoad=false: Addressables must already be resident; Resources may load synchronously.");
+            string lookup = address.HasValue ? LookupHint(controller, address.Value, allowAsync) : string.Empty;
             Debug.LogWarning($"[AudioService] {category} '{id.Value}' failed: {reason}.{lookup}", controller);
+        }
+
+        // Only load failures carry the resolved address; describe where the configured provider looked.
+        private static string LookupHint(AudioController controller, ResolvedAudioClip address, bool allowAsync)
+        {
+            var provider = controller != null ? controller.ClipProvider : null;
+            string hint = " Configured lookup: " + DescribeProvider(provider, address)
+                + ". Check the category, case-sensitive key and Catalog mapping. Resources keys omit the extension; Addressables keys must exist in the active catalog.";
+            return allowAsync ? hint : hint + " AllowAsyncLoad=false: Addressables must already be resident; Resources may load synchronously.";
         }
         internal static string DescribeProvider(IAudioClipProvider provider, ResolvedAudioClip address)
         {
