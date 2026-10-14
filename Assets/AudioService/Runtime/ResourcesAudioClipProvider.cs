@@ -36,10 +36,14 @@ namespace Controller.Audio
             return entry;
         }
 
+        // A null Resources key falls back to the ID; an empty key disables Resources for that clip.
+        private static string KeyOf(ResolvedAudioClip address) => address.ResourcesKey ?? address.Id;
+
         public bool TryGetCachedClip(ResolvedAudioClip address, out AudioClip clip)
         {
             clip = null;
-            if (!string.IsNullOrWhiteSpace(address.ResourcesKey) && cache.TryGetValue(BuildPath(address.Category, address.ResourcesKey), out var entry))
+            string key = KeyOf(address);
+            if (!string.IsNullOrWhiteSpace(key) && cache.TryGetValue(BuildPath(address.Category, key), out var entry))
                 clip = entry.Clip;
             return clip != null;
         }
@@ -53,7 +57,7 @@ namespace Controller.Audio
         public bool TryAcquireClip(ResolvedAudioClip address, out AudioClipLease lease)
         {
             lease = null;
-            string key = address.ResourcesKey ?? address.Id;
+            string key = KeyOf(address);
             if (string.IsNullOrWhiteSpace(key))
                 return false;
             string path = BuildPath(address.Category, key);
@@ -83,7 +87,7 @@ namespace Controller.Audio
         private void OnDestroy() => RefreshClipLookup();
         public string DescribeLookup(ResolvedAudioClip address)
         {
-            string key = address.ResourcesKey ?? address.Id;
+            string key = KeyOf(address);
             return string.IsNullOrWhiteSpace(key) ? "Resources disabled (empty key)" : $"Resources path='{BuildPath(address.Category, key)}'";
         }
 
