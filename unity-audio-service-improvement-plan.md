@@ -2,9 +2,9 @@
 
 文件日期：2026-10-15
 
-文件版本：1.33
+文件版本：1.34
 
-狀態：完成 Tween 具名工廠、停止規則與小型語法整理，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.28）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成範例、Editor 診斷與零碎整理，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.29）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1291,6 +1291,22 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤。本機測試只把兩處 `GetCounts` 呼叫配合改為 `Counts()`，未新增測試。本機量測的 20 組配置事件中位數與 §5.27 相同。XML／log 位於 `work/stage-two-hardening/syntax-{run1,editor-run1}-20261015.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
 
+### 5.29 範例、Editor 診斷與零碎整理
+
+記錄日期：2026-10-15。依使用者指定，完成第三次程式碼檢視中「範例、Editor 與零碎項目」的三項（第 9～11 項），從 `a64dce7` 開始修改，未提交。Prefab、場景與序列化欄位不變；對外可見的變更只有 DebugMenu 的命名空間與警告，以及 `SaveCount` 改為 internal，已寫入遷移指南。
+
+| 項目 | 處理 |
+| --- | --- |
+| 9 DebugMenu | 播放、停止與音量項目改走 `AudioService`，移除 18 個方法各自呼叫的 `TryGetController` 守衛（其中 7 個根本沒用到 controller）；8 處空 key 檢查合為 `HasKey`，統一用 `IsNullOrWhiteSpace`；「Prepare and Play BGM」不再呼叫 `controller.Initialize()`，AudioCtrl 不存在或未就緒時改為警告；命名空間改為 `Controller.Audio.Samples`，腳本 GUID 不變 |
+| 10 QuickStart | 新增私有 `OwnedSound`（名稱、handle、請求版本），`PlayOwned` 改收 `OwnedSound` 與播放委派，移除 5 處 `isMusic` 分支。`Stop` 保留 handle，`Release` 供 OnDisable 立即停止並放掉 handle，與原本的停止語意相同 |
+| 11 零碎 | `AudioSettingsPlayerPrefs.SaveCount` 改為 internal；Addressables `OnDestroy` 的錯位註解移到它說明的釋放迴圈上方；`AudioSetupDiagnostics.GetIssues` 拆成 `CheckScene` 與 `CheckPlayModeControls`，兩處長條件改為 `IsInOpenScene`／`IsMainStage`，診斷文字與順序不變 |
+
+**易用性檢查：** DebugMenu 在沒有或未就緒的 AudioCtrl 時，改由 `AudioService` 給出附修正步驟的警告（同一原因只警告一次），與一般呼叫端看到的訊息一致；空白 key 一律提示要填哪個欄位。QuickStart 的公開方法、畫面與行為不變，使用者照抄的程式少了旗標分支。`SaveCount` 從公開 API 移除，遷移指南已註明處理方式。
+
+**維護性檢查：** DebugMenu 由 298 行降為 225 行，未就緒的判斷只剩 `AudioService` 一處；QuickStart 的音樂／語音狀態集中在 `OwnedSound`；`GetIssues` 由 66 行降為 23 行，另有兩個各管一類的檢查方法。第一版 `OwnedSound.Stop` 曾在停止時放掉 handle，會讓「淡出中停用範例」改成淡完才結束；已改為 `Stop`／`Release` 兩個方法以維持原語意，並重跑完整測試。
+
+**驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；第一版 `OwnedSound` 的完整測試同樣全數通過。本機測試只配合修改：5 個檔案補上 `using Controller.Audio.Samples;`，QuickStart 相關測試改經 `OwnedSound.Handle` 讀取 handle；未新增測試。本機量測的 20 組配置事件中位數與 §5.28 相同。XML／log 位於 `work/stage-two-hardening/samples-{run2,editor-run2}-20261015.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1496,6 +1512,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成 ClipHold 素材持有、Finish／Store.Request 拆分及 AudioSourcePool／AudioAdmission 抽出；PlayMode 402／402、EditMode 29／29 通過，見 §5.26。
 - [x] 完成 PlayerPrefs 通道索引、設定綁定旗標、Controller 守衛統一與 Resources key 解析整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.27。
 - [x] 完成 Tween 具名工廠、StopResult、內建型別與 tuple、長 lambda 與 Fallback 重複整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.28。
+- [x] 完成 DebugMenu 守衛與命名空間、QuickStart 的 OwnedSound、SaveCount 改為 internal、Addressables 註解與 GetIssues 拆分；PlayMode 402／402、EditMode 29／29 通過，見 §5.29。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1547,3 +1564,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.31 | 2026-10-14 | 合併 Playback 的兩種素材持有為 ClipHold；拆分 Finish 與 AudioClipStore.Request；從引擎抽出聲源池與並發接納；PlayMode 402／402、EditMode 29／29 通過，配置事件與修改前相同，見 §5.26 |
 | 1.32 | 2026-10-14 | 移除最後一處 enum 順序耦合；拆掉設定綁定的旗標參數；Controller 命令統一經過 ReadyEngine 並合併 Mixer 套用；Resources key 解析共用；PlayMode 402／402、EditMode 29／29 通過，見 §5.27 |
 | 1.33 | 2026-10-15 | Tween 改用具名工廠與 Is；統一停止結果規則；改用 StrongBox 與 tuple；抽出準備佇列與失敗提示的長邏輯並合併 Fallback 重複；PlayMode 402／402、EditMode 29／29 通過，見 §5.28 |
+| 1.34 | 2026-10-15 | DebugMenu 改走 AudioService 並移至 Samples 命名空間；QuickStart 抽出 OwnedSound；SaveCount 改為 internal；GetIssues 拆成場景與 Play Mode 檢查；PlayMode 402／402、EditMode 29／29 通過，見 §5.29 |

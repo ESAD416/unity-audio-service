@@ -25,6 +25,19 @@
 - **Provider 例外**：Provider 拋出的例外現在以 `Debug.LogException` 記錄後視為取得失敗。刻意拋錯的測試需加上 `LogAssert.Expect`。
 - **診斷文字**：未就緒時的控制操作警告改為 `Control call ignored: ...`，不再顯示 `Sfx ''`；依舊文字過濾記錄的工具需更新。設定不同的重複 AudioController 被移除時會警告。
 
+## 2026-10-15 範例與設定元件
+
+依第三次程式碼檢視整理範例與零碎項目。下表變更會在編譯時直接報錯；Prefab、場景與序列化欄位不變。
+
+| 舊入口／行為 | 新入口／處理方式 |
+| --- | --- |
+| `Controller.Audio.AudioControllerDebugMenu` | 命名空間改為 `Controller.Audio.Samples`，與其他範例一致；在引用它的檔案加上 `using Controller.Audio.Samples;`。腳本 GUID 不變，場景與 Prefab 的引用不受影響 |
+| `AudioSettingsPlayerPrefs.SaveCount` | 改為 internal，沒有公開替代；需要確定已寫入磁碟時直接呼叫 `Flush()` |
+
+行為變更：
+
+- **DebugMenu 警告**：播放、停止與音量項目改走 `AudioService`。場景沒有 AudioCtrl 或它尚未就緒時，改由 `AudioService` 提示修正步驟，同一原因只提示一次，不再每次顯示 `AudioController.Instance is null`；AudioCtrl 停用時，音量項目也改為提示而不寫入。key 空白時一律提示 `<名稱> key is empty.`，「Prepare and Play BGM」也會提示（原本不提示）。
+
 ## 播放與控制
 
 | 舊入口／行為 | 新入口／處理方式 |
@@ -55,7 +68,7 @@ SFX 循環不再自動替換上一個循環。需要風聲等單一擁有者時�
 - 不要依賴名為 BGM／Sound／Sound_Loop／Voice／Voice_Loop 的固定 AudioSource 子物件；所有來源都按需建立並共用動態池。
 - 自訂 UnityEvent 若綁定已移除的 Controller 播放方法，須重新綁定自己的 void adapter；可參考 Samples 的 AudioQuickStart。靜態 AudioService 不能直接取代 Inspector 裡的舊事件目標。
 - `PrewarmSources`／`TrimIdleSources`／`Diagnostics.CreatedSources` 現在計算全部聲源，不再另加五個相容聲源。Loading 預約算並發名額，但不占用 AudioSource。
-- DebugMenu 已移至 Samples 並保留腳本 GUID；自訂 assembly 若引用此類型，需參照 `Controller.Audio.Samples`。
+- DebugMenu 已移至 Samples 並保留腳本 GUID；自訂 assembly 若引用此類型，需參照 `Controller.Audio.Samples` assembly，2026-10-15 起命名空間也改為 `Controller.Audio.Samples`。
 
 ## 自訂 Provider
 

@@ -1,5 +1,13 @@
 # 變更紀錄
 
+## Unreleased - 範例、Editor 診斷與零碎整理（2026-10-15）
+
+- `AudioControllerDebugMenu` 的播放、停止與音量項目改走 `AudioService`，移除 18 個方法各自呼叫的 Controller 守衛（其中 7 個根本沒用到 controller）與多餘的 `Initialize()`；AudioCtrl 不存在或未就緒時改由 `AudioService` 警告。8 處空 key 檢查合為 `HasKey`，統一用 `IsNullOrWhiteSpace`。
+- `AudioQuickStart` 以私有 `OwnedSound` 保存音樂與語音各自的 handle 與請求版本，移除 5 處 `isMusic` 分支；公開方法與行為不變。
+- `AudioSetupDiagnostics.GetIssues` 拆成場景檢查與 Play Mode 控制檢查，診斷文字與順序不變；Addressables `OnDestroy` 的錯位註解移到它說明的釋放迴圈上方。
+- **小幅破壞性：** DebugMenu 的命名空間改為 `Controller.Audio.Samples`，與其他範例一致（腳本 GUID 不變，場景引用不受影響）；`AudioSettingsPlayerPrefs.SaveCount` 改為 internal，只供驗證寫入合併。處理方式見[遷移指南](Documentation/Migration.md)。
+- 本機 PlayMode 402／402、EditMode 29／29 通過，配置事件與上一輪相同；本輪未重跑 macOS Player。詳見改善計畫 §5.29。
+
 ## Unreleased - Tween 具名工廠、停止規則與小型語法整理（2026-10-15）
 
 - 引擎 5 處 Tween 物件初始化改用 `Tween.Fade`／`Tween.FadeOut` 具名工廠，「轉場是否屬於某個播放」改用 `Tween.Is`。新增 `StopResult`，讓淘汰、Shutdown 與單次停止共用「尚未開始就停止即為取消」的規則，`StopPlayback` 簡化為兩個分支。
