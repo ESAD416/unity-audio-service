@@ -28,6 +28,18 @@ namespace Controller.Audio
             public Playback Playback;
             public bool Active => Duration > 0;
 
+            /// <summary>Move between two values; nothing runs at the end.</summary>
+            public static Tween Fade(float from, float to, float seconds)
+                => new Tween { Start = from, Target = to, Duration = seconds };
+
+            /// <summary>Fade to silence, then run the completion for playback.</summary>
+            public static Tween FadeOut(float from, float seconds, TweenCompletion then, Playback playback)
+                => new Tween { Start = from, Target = 0, Duration = seconds, Completion = then, Playback = playback };
+
+            /// <summary>True when this tween will run the given completion for playback.</summary>
+            public bool Is(TweenCompletion completion, Playback playback)
+                => Completion == completion && ReferenceEquals(Playback, playback);
+
             public float Advance(float delta)
             {
                 Elapsed += delta;
@@ -357,16 +369,7 @@ namespace Controller.Audio
             playback.Emitter.Pending = playback;
             var emitter = playback.Emitter;
             if (FadesOutCurrentMusic(playback, emitter))
-            {
-                emitter.Transition = new Tween
-                {
-                    Start = emitter.Envelope,
-                    Target = 0,
-                    Duration = playback.Options.FadeOutSeconds,
-                    Completion = TweenCompletion.StartPending,
-                    Playback = playback
-                };
-            }
+                emitter.Transition = Tween.FadeOut(emitter.Envelope, playback.Options.FadeOutSeconds, TweenCompletion.StartPending, playback);
             else
                 Start(playback);
         }
@@ -408,12 +411,7 @@ namespace Controller.Audio
             playback.Handle.State = AudioPlaybackState.Playing;
             ApplyPause(playback);
             if (playback.Options.FadeInSeconds > 0)
-                emitter.Transition = new Tween
-                {
-                    Start = 0,
-                    Target = 1,
-                    Duration = playback.Options.FadeInSeconds
-                };
+                emitter.Transition = Tween.Fade(0, 1, playback.Options.FadeInSeconds);
         }
 
         private void Finish(Playback playback, AudioCompletion result, string reason = null, bool resumePending = true)
@@ -485,15 +483,9 @@ namespace Controller.Audio
         private static void RestoreCancelledFade(Emitter emitter, Playback cancelled)
         {
             ref var transition = ref emitter.Transition;
-            if (transition.Completion != TweenCompletion.StartPending || !ReferenceEquals(transition.Playback, cancelled))
+            if (!transition.Is(TweenCompletion.StartPending, cancelled))
                 return;
-            float fullFadeSeconds = transition.Duration;
-            transition = new Tween
-            {
-                Start = emitter.Envelope,
-                Target = 1,
-                Duration = (1 - emitter.Envelope) * fullFadeSeconds
-            };
+            transition = Tween.Fade(emitter.Envelope, 1, (1 - emitter.Envelope) * transition.Duration);
         }
 
         public bool Stop(AudioHandle handle, float seconds)
@@ -516,14 +508,7 @@ namespace Controller.Audio
             else if (p.Handle.State == AudioPlaybackState.Paused || seconds <= 0)
                 Finish(p, AudioCompletion.Stopped);
             else
-                p.Emitter.Transition = new Tween
-                {
-                    Start = p.Emitter.Envelope,
-                    Target = 0,
-                    Duration = seconds,
-                    Completion = TweenCompletion.Stop,
-                    Playback = p
-                };
+                p.Emitter.Transition = Tween.FadeOut(p.Emitter.Envelope, seconds, TweenCompletion.Stop, p);
         }
 
         public bool Pause(AudioHandle handle, bool pause)
@@ -622,12 +607,7 @@ namespace Controller.Audio
                 bus.Gain = target;
             }
             else
-                bus.Fade = new Tween
-                {
-                    Start = bus.Gain,
-                    Target = target,
-                    Duration = seconds
-                };
+                bus.Fade = Tween.Fade(bus.Gain, target, seconds);
             RefreshGains(AudioMixerLayout.MaskOf(channel));
         }
 
@@ -797,11 +777,7 @@ namespace Controller.Audio
         }
 
         private static bool KeepsPlayingAfterReset(Playback p)
-        {
-            var transition = p.Emitter.Transition;
-            bool stopping = transition.Completion == TweenCompletion.Stop && ReferenceEquals(transition.Playback, p);
-            return p.Options.Loop && !stopping;
-        }
+            => p.Options.Loop && !p.Emitter.Transition.Is(TweenCompletion.Stop, p);
 
         // A reset stops native sources. Replay a stopped loop from its start, keep
         // a source that survived, and restore the handle's paused state.
