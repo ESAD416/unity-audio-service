@@ -59,8 +59,8 @@ namespace Controller.Audio
             preparedController = null; preparedBgm = null; preparedGroup = null;
             handle?.Stop();
             if (controller != null) controller.ReleaseGroup(group);
-            // Ordinary playback also retains the cache. The scene owner chooses
-            // when to call ReleaseUnusedClips for the whole service.
+            // Ordinary playback also retains the cache until the next non-additive
+            // scene load; additive flows may call ReleaseUnusedClips themselves.
         }
 
         private void OnDisable() => ContextReleasePreparedBgm();

@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using UnityEngine.Audio;
+using UnityEngine.SceneManagement;
 
 namespace Controller.Audio
 {
@@ -102,7 +103,7 @@ namespace Controller.Audio
             Instance = this;
             if (Ready)
             {
-                AttachAudioConfiguration();
+                AttachUnityEvents();
                 return;
             }
 
@@ -129,7 +130,7 @@ namespace Controller.Audio
             if (!IsCurrentEngine(current))
                 return;
             AttachProviderNotifications();
-            AttachAudioConfiguration();
+            AttachUnityEvents();
         }
 
         public void Shutdown()
@@ -140,7 +141,7 @@ namespace Controller.Audio
             shuttingDown = true;
             try
             {
-                AudioSettings.OnAudioConfigurationChanged -= OnAudioConfigurationChanged;
+                DetachUnityEvents();
                 MixerState.DetachSettings();
                 DetachProviderNotifications();
                 UnbindCatalog();
@@ -193,10 +194,25 @@ namespace Controller.Audio
         private bool IsCurrentEngine(AudioPlaybackEngine expected)
             => Ready && expected != null && ReferenceEquals(engine, expected) && this != null && isActiveAndEnabled;
 
-        private void AttachAudioConfiguration()
+        private void AttachUnityEvents()
+        {
+            DetachUnityEvents();
+            AudioSettings.OnAudioConfigurationChanged += OnAudioConfigurationChanged;
+            SceneManager.sceneLoaded += OnSceneLoaded;
+        }
+
+        private void DetachUnityEvents()
         {
             AudioSettings.OnAudioConfigurationChanged -= OnAudioConfigurationChanged;
-            AudioSettings.OnAudioConfigurationChanged += OnAudioConfigurationChanged;
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+        }
+
+        // Unity unloads unused assets on a non-additive load. Release the ordinary
+        // playback cache at the same boundary; playing sounds and PrepareClip groups keep their clips.
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (mode == LoadSceneMode.Single && Ready)
+                engine?.ReleaseUnused();
         }
 
         private void OnAudioConfigurationChanged(bool deviceWasChanged)

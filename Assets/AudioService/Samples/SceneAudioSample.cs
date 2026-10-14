@@ -48,21 +48,22 @@ namespace Controller.Audio.Samples
             });
         }
         /// <summary>
-        /// Whole-scene exit: stop only this sample's sound, cancel preparation,
-        /// remove its group, and clear ordinary cache retention service-wide.
-        /// Active playback and other retained groups stay valid.
+        /// Scene exit: stop only this sample's sound, cancel preparation and remove
+        /// its group. The service clears ordinary playback cache on the next
+        /// non-additive scene load; other groups and active playback stay valid.
         /// </summary>
         public void ReleaseSceneAudio()
         {
             version++;
-            var owner = controller; var handle = ownedSound; string retainedGroup = group;
-            controller = null; ownedSound = null; group = null;
+            var owner = controller;
+            var handle = ownedSound;
+            string retainedGroup = group;
+            controller = null;
+            ownedSound = null;
+            group = null;
             handle?.Stop();
-            if (owner == null) return;
-            owner.ReleaseGroup(retainedGroup);
-            // This is a whole-scene boundary. For partial scene/region unloads,
-            // leave this global cache policy to the application's scene manager.
-            owner.ReleaseUnusedClips();
+            if (owner != null)
+                owner.ReleaseGroup(retainedGroup);
         }
         private void OnDisable() => ReleaseSceneAudio();
     }
