@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace Controller.Audio.Samples
@@ -5,66 +6,74 @@ namespace Controller.Audio.Samples
     /// <summary>Playable sample and optional UnityEvent adapter. Assign clips in the Inspector.</summary>
     public sealed class AudioQuickStart : MonoBehaviour
     {
+        // A replaceable sound this sample started: its handle, and a request number
+        // that tells an outdated Play call apart from the latest command.
+        private sealed class OwnedSound
+        {
+            public readonly string Name;
+            public AudioHandle Handle;
+            public int Request;
+            public OwnedSound(string name) => Name = name;
+
+            // Invalidate any Play call still in progress, then stop the owned sound.
+            public void Stop(float fadeOutSeconds)
+            {
+                Request++;
+                Handle?.Stop(fadeOutSeconds);
+            }
+
+            // On disable: stop at once, even mid-fade, and let go of the handle.
+            public void Release()
+            {
+                Request++;
+                var current = Handle;
+                Handle = null;
+                current?.Stop();
+            }
+        }
+
         [SerializeField] private AudioClip music;
         [SerializeField] private AudioClip sound;
         [SerializeField] private AudioClip voice;
         [Tooltip("Show the demonstration controls during Play Mode. Disable when using these methods from UI Buttons.")]
         [SerializeField] private bool showControls = true;
-        private AudioHandle musicHandle, voiceHandle;
-        private int musicRequest, voiceRequest;
+        private readonly OwnedSound ownedMusic = new("Music"), ownedVoice = new("Voice");
         private string playbackMessage;
         private GUIStyle messageStyle;
 
         // Void adapters remain bindable to Unity UI Button events.
-        public void PlayMusic() => PlayOwned(true);
+        public void PlayMusic() => PlayOwned(ownedMusic, () => AudioService.PlayBgm(music));
         public void PlaySound() { if (isActiveAndEnabled) AudioService.PlaySfx(sound); }
-        public void PlayVoice() => PlayOwned(false);
-        private void PlayOwned(bool isMusic)
+        public void PlayVoice() => PlayOwned(ownedVoice, () => AudioService.PlayVoice(voice));
+        private void PlayOwned(OwnedSound owned, Func<AudioHandle> play)
         {
             if (this == null || !isActiveAndEnabled) return;
-            int request = isMusic ? ++musicRequest : ++voiceRequest;
+            int request = ++owned.Request;
             // These direct-clip requests replace immediately. Failed/rejected
             // requests leave the old sound playing, so keep its control handle.
-            var next = isMusic ? AudioService.PlayBgm(music) : AudioService.PlayVoice(voice);
+            var next = play();
             // Completion callbacks can stop, disable, or start this sample again
             // before Play returns. The most recent command owns the result.
-            if (this == null || !isActiveAndEnabled || request != (isMusic ? musicRequest : voiceRequest))
+            if (this == null || !isActiveAndEnabled || request != owned.Request)
             {
                 next.Stop();
                 return;
             }
             if (next.IsFinished)
             {
-                playbackMessage = $"{(isMusic ? "Music" : "Voice")} did not start: {next.FailureReason ?? next.Result.ToString()}";
+                playbackMessage = $"{owned.Name} did not start: {next.FailureReason ?? next.Result.ToString()}";
                 return;
             }
-            if (isMusic)
-                musicHandle = next;
-            else
-                voiceHandle = next;
+            owned.Handle = next;
             playbackMessage = null;
         }
-        public void StopMusic()
-        {
-            musicRequest++;
-            musicHandle?.Stop(.5f);
-        }
-        public void StopVoice()
-        {
-            voiceRequest++;
-            voiceHandle?.Stop(.1f);
-        }
+        public void StopMusic() => ownedMusic.Stop(.5f);
+        public void StopVoice() => ownedVoice.Stop(.1f);
         public void SetMasterVolume(float volume) => AudioService.SetMasterVolume(volume);
         private void OnDisable()
         {
-            musicRequest++;
-            voiceRequest++;
-            var oldMusic = musicHandle;
-            var oldVoice = voiceHandle;
-            musicHandle = null;
-            voiceHandle = null;
-            oldMusic?.Stop();
-            oldVoice?.Stop();
+            ownedMusic.Release();
+            ownedVoice.Release();
         }
         private void OnGUI()
         {
