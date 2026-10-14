@@ -38,12 +38,11 @@ namespace Controller.Audio
                         groups[i] = group;
         }
 
-        public void BindSettings(IAudioSettingsHandler handler, bool active, bool applyStored)
+        /// <summary>Stop following the current settings source and use another; AttachSettings starts following it.</summary>
+        public void ReplaceSettings(IAudioSettingsHandler handler)
         {
             DetachSettings();
             settings = handler;
-            if (active)
-                AttachSettings(applyStored);
         }
 
         public void UnbindSettings(IAudioSettingsHandler handler)

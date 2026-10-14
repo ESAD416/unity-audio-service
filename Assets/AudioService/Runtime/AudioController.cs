@@ -127,9 +127,8 @@ namespace Controller.Audio
             var current = engine;
             BindCatalog();
             if (!settingsConfigured)
-                MixerState.BindSettings(settingsSource as IAudioSettingsHandler, true, true);
-            else
-                MixerState.AttachSettings();
+                MixerState.ReplaceSettings(settingsSource as IAudioSettingsHandler);
+            MixerState.AttachSettings();
             if (!IsCurrentEngine(current))
                 return;
             AttachProviderNotifications();
@@ -395,7 +394,9 @@ namespace Controller.Audio
         public void BindSettings(IAudioSettingsHandler handler, bool applyStored = true)
         {
             settingsConfigured = true;
-            MixerState.BindSettings(handler, Ready, applyStored);
+            MixerState.ReplaceSettings(handler);
+            if (Ready)
+                MixerState.AttachSettings(applyStored);
         }
 
         public void UnbindSettings(IAudioSettingsHandler handler) => MixerState.UnbindSettings(handler);
