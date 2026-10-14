@@ -886,15 +886,52 @@ namespace Controller.Audio
             if (disposed)
                 return;
             const string reason = "Audio system configuration changed";
+            // Loops (including PlayBgm music) are continuous state and keep their handles.
+            // One-shots and loops already being stopped end as before.
             foreach (var p in active.ToArray())
-                Finish(p, p.Handle.State == AudioPlaybackState.Loading ? AudioCompletion.Cancelled : AudioCompletion.Failed, reason);
+            {
+                if (p.Handle.IsFinished)
+                    continue;
+                if (p.Handle.State == AudioPlaybackState.Loading)
+                    Finish(p, AudioCompletion.Cancelled, reason);
+                else if (!KeepsPlayingAfterReset(p))
+                    Finish(p, AudioCompletion.Failed, reason);
+            }
+
             // Reset invalidates old preparations and resident data assumptions.
+            // Kept loops still own their leases from the previous store.
             SetProvider(provider, true);
             Array.Clear(busTweens, 0, busTweens.Length);
             foreach (var emitter in emitters)
                 emitter.AppliedGain = float.NaN;
             RefreshRouting();
+            foreach (var p in active)
+                RestartAfterReset(p);
             RefreshGains();
+        }
+
+        private static bool KeepsPlayingAfterReset(Playback p)
+        {
+            var transition = p.Emitter.Transition;
+            bool stopping = transition.Completion == TweenCompletion.Stop && ReferenceEquals(transition.Playback, p);
+            return p.Options.Loop && !stopping;
+        }
+
+        // A reset stops native sources. Replay a stopped loop from its start, keep
+        // a source that survived, and restore the handle's paused state.
+        private static void RestartAfterReset(Playback p)
+        {
+            var emitter = p.Emitter;
+            emitter.Transition = default;
+            emitter.Envelope = 1;
+            var source = emitter.Source;
+            bool paused = p.Handle.State == AudioPlaybackState.Paused;
+            if (!paused && source.isPlaying)
+                return;
+            source.Stop();
+            source.Play();
+            if (paused)
+                source.Pause();
         }
 
         public AudioDiagnostics Diagnostics
