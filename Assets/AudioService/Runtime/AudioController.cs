@@ -327,10 +327,8 @@ namespace Controller.Audio
             else if (TryResolve(category, id, out var current, out var address))
                 return current.Play(category, address, null, options, slot, id);
 
-            var failed = new AudioHandle { AudioId = id, Category = category };
-            failed.Finish(AudioCompletion.Failed, "Audio service is not ready");
-            ReportPlaybackFailure(category, id, "Audio service is not ready. Enable AudioCtrl.prefab and call playback from Start or later");
-            return failed;
+            ReportPlaybackFailure(category, id, AudioHandle.NotReadyReason);
+            return AudioHandle.Failed(category, id, AudioHandle.NotReadyReason);
         }
 
         /// <summary>Advanced: play in any category without the BGM or dialogue replacement slot.

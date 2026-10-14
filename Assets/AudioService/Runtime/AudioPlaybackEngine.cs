@@ -331,9 +331,10 @@ namespace Controller.Audio
                 Category = category,
                 Owner = this
             };
-            if (disposed || !host.Ready || !AudioValues.IsValidCategory(category) || (direct == null && string.IsNullOrWhiteSpace(key)))
+            string invalid = InvalidRequest(category, key, direct);
+            if (invalid != null)
             {
-                Reject(handle, AudioCompletion.Failed, "Service unavailable or empty audio id/clip");
+                Reject(handle, AudioCompletion.Failed, invalid);
                 return handle;
             }
 
@@ -344,6 +345,17 @@ namespace Controller.Audio
                 return handle;
             StartAccepted(handle, key, address, direct, supplied, slot, victims);
             return handle;
+        }
+
+        private string InvalidRequest(AudioCategory category, string key, AudioClip direct)
+        {
+            if (disposed || !host.Ready)
+                return AudioHandle.NotReadyReason;
+            if (!AudioValues.IsValidCategory(category))
+                return "Invalid AudioCategory. Use Bgm, Sfx or Voice";
+            if (direct == null && string.IsNullOrWhiteSpace(key))
+                return "Empty audio ID and no AudioClip. Pass a non-empty ID or an existing clip";
+            return null;
         }
 
         private void StartAccepted(AudioHandle handle, string key, ResolvedAudioClip? address, AudioClip direct, PlayOptions supplied, PlaybackSlot slot, Playback[] victims)

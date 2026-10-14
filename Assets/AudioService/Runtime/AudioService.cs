@@ -43,28 +43,23 @@ namespace Controller.Audio
         private static AudioHandle Voice(AudioId id, AudioClip clip, PlayOptions options, VoicePlaybackMode mode)
         {
             if (mode != VoicePlaybackMode.Replace && mode != VoicePlaybackMode.Overlap)
-                return Failed(AudioCategory.Voice, id, "Invalid VoicePlaybackMode. Use Replace or Overlap.");
+                return Failed(AudioCategory.Voice, id, "Invalid VoicePlaybackMode. Use Replace or Overlap");
             return Request(AudioCategory.Voice, id, clip, options, mode == VoicePlaybackMode.Replace ? PlaybackSlot.Dialogue : PlaybackSlot.None);
         }
         private static AudioHandle Request(AudioCategory category, AudioId id, AudioClip clip, PlayOptions options, PlaybackSlot slot)
         {
             var controller = AudioController.Instance;
             return controller != null ? controller.Request(category, id, clip, options, slot)
-                : Failed(category, id, "AudioController is missing. Add AudioCtrl.prefab to the entry scene and call playback from Start or later.");
+                : Failed(category, id, "AudioController is missing. Add AudioCtrl.prefab to the entry scene and call playback from Start or later");
         }
         private static AudioHandle Failed(AudioCategory category, AudioId id, string reason)
         {
-            var handle = new AudioHandle { Category = category, AudioId = id };
-            handle.Finish(AudioCompletion.Failed, reason);
-            ReportFailure(category, id, reason);
-            return handle;
-        }
-        private static void ReportFailure(AudioCategory category, AudioId id, string reason)
-        {
             var controller = AudioController.Instance;
-            if (controller != null) controller.ReportPlaybackFailure(category, id, reason);
+            if (controller != null)
+                controller.ReportPlaybackFailure(category, id, reason);
             else if (Application.isEditor || Debug.isDebugBuild)
                 (missingControllerLog ??= new AudioFailureLog()).Report(null, category, id, reason);
+            return AudioHandle.Failed(category, id, reason);
         }
         private static AudioController Controller
         {

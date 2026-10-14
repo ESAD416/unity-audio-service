@@ -86,6 +86,8 @@ namespace Controller.Audio
 
     public sealed class AudioHandle
     {
+        // Failure reasons carry the next step; the failure log appends the final period.
+        internal const string NotReadyReason = "Audio service is not ready. Enable AudioCtrl.prefab and call playback from Start or later";
         private Action<AudioHandle> completed;
         internal AudioPlaybackEngine Owner;
         internal AudioPlaybackEngine.Playback Playback;
@@ -116,6 +118,14 @@ namespace Controller.Audio
             {
                 completed -= value;
             }
+        }
+
+        /// <summary>A finished handle for a request that never reached the playback engine.</summary>
+        internal static AudioHandle Failed(AudioCategory category, AudioId id, string reason)
+        {
+            var handle = new AudioHandle { Category = category, AudioId = id };
+            handle.Finish(AudioCompletion.Failed, reason);
+            return handle;
         }
 
         public bool Stop(float fadeOutSeconds = 0f) => Owner != null && Owner.Stop(this, AudioValues.Seconds(fadeOutSeconds));
