@@ -45,8 +45,10 @@ namespace Controller.Audio.Editor
         public static void ApplyDefaultProfile(AudioImporter importer, AudioClipLoadType loadType)
         {
             var settings = importer.defaultSampleSettings;
-            settings.loadType = loadType; settings.preloadAudioData = false;
-            importer.defaultSampleSettings = settings; importer.loadInBackground = true;
+            settings.loadType = loadType;
+            settings.preloadAudioData = false;
+            importer.defaultSampleSettings = settings;
+            importer.loadInBackground = true;
         }
 
         private static void ApplySelected(AudioClipLoadType loadType)
@@ -58,7 +60,8 @@ namespace Controller.Audio.Editor
                 var importer = AssetImporter.GetAtPath(path) as AudioImporter;
                 if (importer == null) continue;
                 Undo.RecordObject(importer, "Audio import profile");
-                ApplyDefaultProfile(importer, loadType); importer.SaveAndReimport();
+                ApplyDefaultProfile(importer, loadType);
+                importer.SaveAndReimport();
                 Debug.Log($"[Audio Imports] {path}: Default = {loadType}, background enabled, preload disabled. Compression, quality, sample rate and platform overrides preserved; review overrides and call PrepareClip before playback.", clip);
             }
         }

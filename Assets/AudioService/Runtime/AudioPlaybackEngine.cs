@@ -117,7 +117,7 @@ namespace Controller.Audio
         }
 
         public string LastFailure { get; private set; }
-        public int MaxVoices { get; set; }
+        public int MaxConcurrentSounds { get; set; }
         public AudioConcurrencyPolicy ConcurrencyPolicy { get; set; }
 
         public AudioPlaybackEngine(AudioController host, IAudioClipProvider provider)
@@ -387,7 +387,7 @@ namespace Controller.Audio
         private bool TryPlanAdmission(AudioHandle incoming, PlaybackSlot slot, int maxInstances, AudioConcurrencyPolicy policy, out Playback[] victims)
         {
             victims = null;
-            if (MaxVoices <= 0 && maxInstances <= 0)
+            if (MaxConcurrentSounds <= 0 && maxInstances <= 0)
                 return true;
             bool replacesSlot = slot != PlaybackSlot.None;
             int count = active.Count, same = 0;
@@ -416,7 +416,7 @@ namespace Controller.Audio
                 return false;
             }
 
-            int globalVictims = MaxVoices > 0 ? Mathf.Max(0, count - soundVictims - MaxVoices + 1) : 0;
+            int globalVictims = MaxConcurrentSounds > 0 ? Mathf.Max(0, count - soundVictims - MaxConcurrentSounds + 1) : 0;
             if (globalVictims > 0 && ConcurrencyPolicy == AudioConcurrencyPolicy.RejectNew)
             {
                 Reject(incoming, AudioCompletion.Rejected, "Global concurrency limit");

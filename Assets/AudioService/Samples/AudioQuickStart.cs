@@ -29,24 +29,42 @@ namespace Controller.Audio.Samples
             // Completion callbacks can stop, disable, or start this sample again
             // before Play returns. The most recent command owns the result.
             if (this == null || !isActiveAndEnabled || request != (isMusic ? musicRequest : voiceRequest))
-            { next.Stop(); return; }
+            {
+                next.Stop();
+                return;
+            }
             if (next.IsFinished)
             {
                 playbackMessage = $"{(isMusic ? "Music" : "Voice")} did not start: {next.FailureReason ?? next.Result.ToString()}";
                 return;
             }
-            if (isMusic) musicHandle = next; else voiceHandle = next;
+            if (isMusic)
+                musicHandle = next;
+            else
+                voiceHandle = next;
             playbackMessage = null;
         }
-        public void StopMusic() { musicRequest++; musicHandle?.Stop(.5f); }
-        public void StopVoice() { voiceRequest++; voiceHandle?.Stop(.1f); }
+        public void StopMusic()
+        {
+            musicRequest++;
+            musicHandle?.Stop(.5f);
+        }
+        public void StopVoice()
+        {
+            voiceRequest++;
+            voiceHandle?.Stop(.1f);
+        }
         public void SetMasterVolume(float volume) => AudioService.SetMasterVolume(volume);
         private void OnDisable()
         {
-            musicRequest++; voiceRequest++;
-            var oldMusic = musicHandle; var oldVoice = voiceHandle;
-            musicHandle = voiceHandle = null;
-            oldMusic?.Stop(); oldVoice?.Stop();
+            musicRequest++;
+            voiceRequest++;
+            var oldMusic = musicHandle;
+            var oldVoice = voiceHandle;
+            musicHandle = null;
+            voiceHandle = null;
+            oldMusic?.Stop();
+            oldVoice?.Stop();
         }
         private void OnGUI()
         {

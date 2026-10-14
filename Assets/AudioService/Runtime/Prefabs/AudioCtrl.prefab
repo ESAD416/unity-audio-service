@@ -52,7 +52,7 @@ MonoBehaviour:
   defaultBgm: 1
   defaultSfx: 1
   defaultVoice: 1
-  saveImmediately: 1
+  autoSave: 1
 --- !u!1 &5324041666618443824
 GameObject:
   m_ObjectHideFlags: 0

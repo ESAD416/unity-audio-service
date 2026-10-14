@@ -36,8 +36,18 @@ namespace Controller.Audio
         }
         public static void Deliver(Action<AudioClipLease> callback, AudioClipLease lease)
         {
-            try { if (callback != null) callback(lease); else Dispose(lease); }
-            catch (Exception error) { Dispose(lease); Debug.LogException(error); }
+            try
+            {
+                if (callback != null)
+                    callback(lease);
+                else
+                    Dispose(lease);
+            }
+            catch (Exception error)
+            {
+                Dispose(lease);
+                Debug.LogException(error);
+            }
         }
     }
 
@@ -49,11 +59,32 @@ namespace Controller.Audio
         private readonly Queue<AudioClipLease> releases = new();
         private int depth;
         private bool dispatching;
-        public Scope Begin() { depth++; return new Scope(this); }
-        public void Enqueue(Action callback) { pending.Enqueue(callback); Drain(); }
+        public Scope Begin()
+        {
+            depth++;
+            return new Scope(this);
+        }
+
+        public void Enqueue(Action callback)
+        {
+            pending.Enqueue(callback);
+            Drain();
+        }
+
         public void Release(AudioClipLease lease)
-        { if (lease == null) return; releases.Enqueue(lease); Drain(); }
-        private void End() { depth--; Drain(); }
+        {
+            if (lease == null)
+                return;
+            releases.Enqueue(lease);
+            Drain();
+        }
+
+        private void End()
+        {
+            depth--;
+            Drain();
+        }
+
         private void Drain()
         {
             if (depth != 0 || dispatching) return;
@@ -64,9 +95,10 @@ namespace Controller.Audio
                 {
                     // Releasing a provider lease can reenter Play or Shutdown.
                     // Each nested operation sees committed state and drains here.
-                    if (releases.Count > 0) { AudioCallbacks.Dispose(releases.Dequeue()); continue; }
-                    var callback = pending.Dequeue();
-                    AudioCallbacks.Invoke(callback);
+                    if (releases.Count > 0)
+                        AudioCallbacks.Dispose(releases.Dequeue());
+                    else
+                        AudioCallbacks.Invoke(pending.Dequeue());
                 }
             }
             finally { dispatching = false; }

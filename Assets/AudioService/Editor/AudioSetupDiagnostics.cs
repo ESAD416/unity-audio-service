@@ -12,7 +12,11 @@ namespace Controller.Audio.Editor
         public readonly MessageType Severity;
         public readonly Object Context;
         public AudioSetupIssue(string message, MessageType severity, Object context = null)
-        { Message = message; Severity = severity; Context = context; }
+        {
+            Message = message;
+            Severity = severity;
+            Context = context;
+        }
     }
 
     /// <summary>On-demand, read-only Editor checks. Does not load clips, repair settings, or test audible output.</summary>
@@ -25,7 +29,10 @@ namespace Controller.Audio.Editor
         {
             var issues = new List<AudioSetupIssue>();
             if (controller == null)
-            { issues.Add(new AudioSetupIssue("Add and enable AudioCtrl.prefab in the entry scene.", MessageType.Error)); return issues; }
+            {
+                issues.Add(new AudioSetupIssue("Add and enable AudioCtrl.prefab in the entry scene.", MessageType.Error));
+                return issues;
+            }
 
             using (var data = new SerializedObject(controller))
                 CheckMixer(data.FindProperty("mixer").objectReferenceValue as AudioMixer, issues);
@@ -42,11 +49,15 @@ namespace Controller.Audio.Editor
             if (controller.transform.parent != null)
                 issues.Add(new AudioSetupIssue("Move AudioCtrl to the scene root if it should persist across scenes.", MessageType.Warning, controller.transform));
 
-            int listeners = 0; AudioListener extra = null;
+            int listeners = 0;
+            AudioListener extra = null;
             foreach (var listener in Object.FindObjectsByType<AudioListener>(FindObjectsInactive.Exclude))
                 if (listener.isActiveAndEnabled && listener.gameObject.scene.isLoaded
                     && StageUtility.GetStageHandle(listener.gameObject) == StageUtility.GetMainStageHandle())
-                { listeners++; extra = listener; }
+                {
+                    listeners++;
+                    extra = listener;
+                }
             if (listeners == 0)
                 issues.Add(new AudioSetupIssue("No active AudioListener in the loaded scenes. Enable one on the gameplay camera (or another listening object).", MessageType.Warning));
             else if (listeners > 1)
@@ -54,7 +65,10 @@ namespace Controller.Audio.Editor
 
             if (!Application.isPlaying) return issues;
             if (!controller.Ready)
-            { issues.Add(new AudioSetupIssue("Service is not ready. Enable AudioCtrl and call playback from Start or later.", MessageType.Warning, controller)); return issues; }
+            {
+                issues.Add(new AudioSetupIssue("Service is not ready. Enable AudioCtrl and call playback from Start or later.", MessageType.Warning, controller));
+                return issues;
+            }
             if (AudioListener.volume <= 0)
                 issues.Add(new AudioSetupIssue("AudioListener.volume is 0. Restore the listener volume in the code that changed it.", MessageType.Info));
             if (AudioListener.pause)
@@ -91,9 +105,7 @@ namespace Controller.Audio.Editor
             for (int i = 0; i < AudioMixerLayout.CategoryCount; i++)
             {
                 string name = AudioMixerLayout.Group(i);
-                bool found = false;
-                foreach (var group in groups) if (group.name == name) { found = true; break; }
-                if (!found)
+                if (!System.Array.Exists(groups, group => group.name == name))
                     issues.Add(new AudioSetupIssue($"Mixer is missing group '{name}'. Add that group, or use the supplied MasterMixer. That category uses source-volume fallback.", MessageType.Warning, mixer));
             }
         }

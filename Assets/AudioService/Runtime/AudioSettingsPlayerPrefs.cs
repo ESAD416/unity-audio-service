@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace Controller.Audio
 {
@@ -20,17 +21,17 @@ namespace Controller.Audio
         [Range(0, 1)] [SerializeField] private float defaultBgm = 1;
         [Range(0, 1)] [SerializeField] private float defaultSfx = 1;
         [Range(0, 1)] [SerializeField] private float defaultVoice = 1;
-        [Tooltip("Automatically flush after the slider has been idle for saveDelaySeconds.")]
-        [SerializeField] private bool saveImmediately;
+        [Tooltip("Save after volume changes have been idle for the save delay. Volume changes take effect immediately.")]
+        [SerializeField, FormerlySerializedAs("saveImmediately")] private bool autoSave;
         [SerializeField] private float saveDelaySeconds = .25f;
         private readonly float[] values = new float[4];
         private bool loaded, dirty;
         private float flushAt;
         public event Action<AudioChannel, float> VolumeChanged;
-        public float MasterVolume { get { EnsureLoaded(); return values[0]; } }
-        public float BgmVolume { get { EnsureLoaded(); return values[1]; } }
-        public float SfxVolume { get { EnsureLoaded(); return values[2]; } }
-        public float VoiceVolume { get { EnsureLoaded(); return values[3]; } }
+        public float MasterVolume => Stored(AudioChannel.Master);
+        public float BgmVolume => Stored(AudioChannel.Bgm);
+        public float SfxVolume => Stored(AudioChannel.Sfx);
+        public float VoiceVolume => Stored(AudioChannel.Voice);
         public int SaveCount { get; private set; }
         private string Key(int index) => index switch
         {
@@ -46,36 +47,85 @@ namespace Controller.Audio
             2 => defaultSfx,
             _ => defaultVoice
         }, 1);
+
+        private float Stored(AudioChannel channel)
+        {
+            EnsureLoaded();
+            return values[(int)channel];
+        }
+
         private void Awake() => EnsureLoaded();
-        private void EnsureLoaded() { if (!loaded) Reload(); }
+        private void EnsureLoaded()
+        {
+            if (!loaded)
+                Reload();
+        }
+
         public void Reload()
         {
-            for (int i = 0; i < 4; i++) values[i] = AudioValues.Unit(PlayerPrefs.GetFloat(Key(i), Default(i)), Default(i));
+            for (int i = 0; i < values.Length; i++)
+                values[i] = AudioValues.Unit(PlayerPrefs.GetFloat(Key(i), Default(i)), Default(i));
             loaded = true;
         }
+
         public void UpdateVolume(AudioChannel channel, float normalizedVolume)
         {
             EnsureLoaded();
-            if (!AudioValues.IsValidChannel(channel)) return;
+            if (!AudioValues.IsValidChannel(channel))
+                return;
             int index = (int)channel;
             var value = AudioValues.Unit(normalizedVolume);
-            if (values[index] == value) return;
-            values[index] = value; PlayerPrefs.SetFloat(Key(index), value);
-            MarkDirty(); VolumeChanged?.Invoke(channel, value);
+            if (values[index] == value)
+                return;
+            values[index] = value;
+            PlayerPrefs.SetFloat(Key(index), value);
+            MarkDirty();
+            VolumeChanged?.Invoke(channel, value);
         }
-        private void MarkDirty() { dirty = true; flushAt = Time.realtimeSinceStartup + AudioValues.Seconds(saveDelaySeconds); }
-        private void Update() { if (dirty && saveImmediately && Time.realtimeSinceStartup >= flushAt) Flush(); }
-        public void Flush() { if (!dirty) return; PlayerPrefs.Save(); dirty = false; SaveCount++; }
+
+        private void MarkDirty()
+        {
+            dirty = true;
+            flushAt = Time.realtimeSinceStartup + AudioValues.Seconds(saveDelaySeconds);
+        }
+
+        private void Update()
+        {
+            if (dirty && autoSave && Time.realtimeSinceStartup >= flushAt)
+                Flush();
+        }
+
+        public void Flush()
+        {
+            if (!dirty)
+                return;
+            PlayerPrefs.Save();
+            dirty = false;
+            SaveCount++;
+        }
+
         private void OnDisable() => Flush();
-        private void OnApplicationPause(bool paused) { if (paused) Flush(); }
+        private void OnApplicationPause(bool paused)
+        {
+            if (paused)
+                Flush();
+        }
+
         public void ResetSettings()
         {
-            for (int i = 0; i < 4; i++) PlayerPrefs.DeleteKey(Key(i));
-            loaded = false; EnsureLoaded(); MarkDirty(); BroadcastStoredVolumes();
+            for (int i = 0; i < values.Length; i++)
+                PlayerPrefs.DeleteKey(Key(i));
+            loaded = false;
+            EnsureLoaded();
+            MarkDirty();
+            BroadcastStoredVolumes();
         }
+
         public void BroadcastStoredVolumes()
         {
-            EnsureLoaded(); for (int i = 0; i < 4; i++) VolumeChanged?.Invoke((AudioChannel)i, values[i]);
+            EnsureLoaded();
+            for (int i = 0; i < values.Length; i++)
+                VolumeChanged?.Invoke((AudioChannel)i, values[i]);
         }
     }
 }

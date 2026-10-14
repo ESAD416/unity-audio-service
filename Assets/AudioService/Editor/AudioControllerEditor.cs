@@ -11,8 +11,17 @@ namespace Controller.Audio.Editor
         private bool channelControls;
         private double nextCheck;
         private IReadOnlyList<AudioSetupIssue> issues;
-        private void OnEnable() { issues = null; nextCheck = 0; EditorApplication.update += RefreshChecks; }
+        private void OnEnable()
+        {
+            RequestChecks();
+            EditorApplication.update += RefreshChecks;
+        }
         private void OnDisable() => EditorApplication.update -= RefreshChecks;
+        private void RequestChecks()
+        {
+            issues = null;
+            nextCheck = 0;
+        }
         private void RefreshChecks()
         {
             if (target == null || EditorApplication.timeSinceStartup < nextCheck) return;
@@ -27,7 +36,12 @@ namespace Controller.Audio.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("m_Script"));
             EditorGUILayout.HelpBox("Use AudioService.PlayBgm / PlaySfx / PlayVoice. Every play returns a handle; keep it only when you need to control that sound. No preload or prewarm is required for basic playback.", MessageType.Info);
             using (new EditorGUI.DisabledScope(Application.isPlaying))
-            { Field("clipProviderSource"); Field("settingsSource"); Field("mixer"); Field("catalog"); }
+            {
+                Field("clipProviderSource");
+                Field("settingsSource");
+                Field("mixer");
+                Field("catalog");
+            }
             Field("logPlaybackFailures");
             advanced = EditorGUILayout.Foldout(advanced, "Advanced settings", true);
             if (advanced)
@@ -35,14 +49,15 @@ namespace Controller.Audio.Editor
                 using (new EditorGUI.DisabledScope(Application.isPlaying))
                 {
                     Field("loadDefaultMixer");
-                    EditorGUILayout.PropertyField(serializedObject.FindProperty("maxVoices"), new GUIContent("Max Concurrent Sounds",
-                        "Total BGM, SFX and Voice requests, including loading and paused sounds. 0 means no service limit."));
-                    Field("concurrencyPolicy"); Field("pauseOnBackground");
+                    Field("maxConcurrentSounds");
+                    Field("concurrencyPolicy");
+                    Field("pauseOnBackground");
                 }
                 Field("verboseLogging");
                 EditorGUILayout.HelpBox("Max Concurrent Sounds includes BGM, SFX and Voice. 0 means no service limit.", MessageType.Info);
             }
-            if (serializedObject.ApplyModifiedProperties()) { issues = null; nextCheck = 0; }
+            if (serializedObject.ApplyModifiedProperties())
+                RequestChecks();
             var controller = (AudioController)target;
             DrawChecks(controller);
             if (!Application.isPlaying) return;
@@ -65,7 +80,8 @@ namespace Controller.Audio.Editor
         {
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Audio checks", EditorStyles.boldLabel);
-            if (GUILayout.Button("Refresh audio checks")) { nextCheck = 0; issues = null; }
+            if (GUILayout.Button("Refresh audio checks"))
+                RequestChecks();
             if (issues == null) RefreshChecks();
             if (issues != null)
             {
@@ -73,7 +89,10 @@ namespace Controller.Audio.Editor
                 {
                     EditorGUILayout.HelpBox(issue.Message, issue.Severity);
                     if (issue.Context != null && issue.Context != controller && GUILayout.Button("Select " + issue.Context.name))
-                    { Selection.activeObject = issue.Context; EditorGUIUtility.PingObject(issue.Context); }
+                    {
+                        Selection.activeObject = issue.Context;
+                        EditorGUIUtility.PingObject(issue.Context);
+                    }
                 }
                 if (issues.Count == 0)
                     EditorGUILayout.HelpBox("No issues found in the checked scene setup and service controls.", MessageType.Info);

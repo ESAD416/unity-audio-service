@@ -55,8 +55,12 @@ namespace Controller.Audio
         private void ContextReleasePreparedBgm()
         {
             preparationVersion++;
-            var controller = preparedController; var handle = preparedBgm; var group = preparedGroup;
-            preparedController = null; preparedBgm = null; preparedGroup = null;
+            var controller = preparedController;
+            var handle = preparedBgm;
+            var group = preparedGroup;
+            preparedController = null;
+            preparedBgm = null;
+            preparedGroup = null;
             handle?.Stop();
             if (controller != null) controller.ReleaseGroup(group);
             // Ordinary playback also retains the cache until the next non-additive

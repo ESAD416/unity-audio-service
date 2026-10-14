@@ -2,6 +2,7 @@ using System;
 using UnityEngine;
 using UnityEngine.Audio;
 using UnityEngine.SceneManagement;
+using UnityEngine.Serialization;
 
 namespace Controller.Audio
 {
@@ -17,8 +18,9 @@ namespace Controller.Audio
         private bool loadDefaultMixer = true;
         [SerializeField]
         private AudioCatalog catalog;
-        [SerializeField]
-        private int maxVoices;
+        [SerializeField, FormerlySerializedAs("maxVoices")]
+        [Tooltip("Total BGM, SFX and Voice requests, including loading and paused sounds. 0 means no service limit.")]
+        private int maxConcurrentSounds;
         [SerializeField]
         private AudioConcurrencyPolicy concurrencyPolicy;
         [SerializeField]
@@ -56,14 +58,14 @@ namespace Controller.Audio
         public AudioDiagnostics Diagnostics => engine != null ? engine.Diagnostics : default;
         public string LastMixerIssue => MixerState.LastIssue;
 
-        public int MaxVoices
+        public int MaxConcurrentSounds
         {
-            get => maxVoices;
+            get => maxConcurrentSounds;
             set
             {
-                maxVoices = Mathf.Max(0, value);
+                maxConcurrentSounds = Mathf.Max(0, value);
                 if (engine != null)
-                    engine.MaxVoices = maxVoices;
+                    engine.MaxConcurrentSounds = maxConcurrentSounds;
             }
         }
 
@@ -119,7 +121,7 @@ namespace Controller.Audio
             Ready = true;
             engine = new AudioPlaybackEngine(this, ClipProvider)
             {
-                MaxVoices = maxVoices,
+                MaxConcurrentSounds = maxConcurrentSounds,
                 ConcurrencyPolicy = concurrencyPolicy
             };
             var current = engine;

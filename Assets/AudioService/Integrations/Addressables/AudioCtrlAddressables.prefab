@@ -86,7 +86,7 @@ MonoBehaviour:
   defaultBgm: 1
   defaultSfx: 1
   defaultVoice: 1
-  saveImmediately: 1
+  autoSave: 1
   saveDelaySeconds: 0.25
 --- !u!1 &2602953851849723093
 GameObject:
@@ -202,7 +202,7 @@ MonoBehaviour:
   mixer: {fileID: 24100000, guid: 3f35b6efe137c23448b1ee21bfdc970e, type: 2}
   loadDefaultMixer: 1
   catalog: {fileID: 0}
-  maxVoices: 0
+  maxConcurrentSounds: 0
   concurrencyPolicy: 0
   pauseOnBackground: 1
   verboseLogging: 0

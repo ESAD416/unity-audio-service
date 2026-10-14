@@ -8,9 +8,17 @@ namespace Controller.Audio.Editor
     public sealed class AudioCatalogEditor : UnityEditor.Editor
     {
         private IReadOnlyList<string> issues;
-        private void OnEnable() { ValidateData(); Undo.undoRedoPerformed += OnUndoRedo; }
+        private void OnEnable()
+        {
+            ValidateData();
+            Undo.undoRedoPerformed += OnUndoRedo;
+        }
         private void OnDisable() => Undo.undoRedoPerformed -= OnUndoRedo;
-        private void OnUndoRedo() { ValidateData(); Repaint(); }
+        private void OnUndoRedo()
+        {
+            ValidateData();
+            Repaint();
+        }
         private void ValidateData() => issues = ((AudioCatalog)target).GetValidationIssues();
 
         public override void OnInspectorGUI()
