@@ -1,5 +1,12 @@
 # 變更紀錄
 
+## Unreleased - 守衛一致性、殘留 enum 順序與設定綁定整理（2026-10-14）
+
+- `AudioSettingsPlayerPrefs` 改用 `AudioChannel` 與共用通道清單，移除 `new float[4]`、`(AudioChannel)i` 與以 0～3 整數索引的 key／預設值；正式程式只剩 `AudioMixerLayout` 依賴 enum 順序。
+- Controller 的命令一律經過 `ReadyEngine`，取代四種「引擎就緒才轉呼叫」的寫法；三處 Mixer 套用與驗證合為 `ApplyMixer()`，只做 verbose 記錄的方法改名 `LogVerbose`。`AudioMixerState.BindSettings` 的兩個布林參數改為 `ReplaceSettings` 加既有的 `AttachSettings`。
+- Resources Provider 的三處 key 解析共用 `KeyOf`，查快取不再少了 `?? Id`。公開 API、Prefab、序列化欄位與行為不變。
+- 本機 PlayMode 402／402、EditMode 29／29 通過，既有測試未修改；配置事件與上一輪相同。本輪未重跑 macOS Player；詳見改善計畫 §5.27。
+
 ## Unreleased - 素材持有、長方法與引擎責任拆分（2026-10-14）
 
 - Playback 原本以互斥的 `Lease`／`ResidentUsage` 兩個欄位持有素材，每個結束路徑都要成對釋放；改為單一 `ClipHold` 值型別，`Loaded` 參數由 5 個減為 3 個，駐留快取路徑仍不配置。

@@ -2,9 +2,9 @@
 
 文件日期：2026-10-14
 
-文件版本：1.31
+文件版本：1.32
 
-狀態：完成素材持有、長方法與引擎責任拆分，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.26）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成守衛一致性、殘留 enum 順序與設定綁定整理，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.27）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1257,6 +1257,23 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤，既有測試未修改。現有測試已涵蓋聲源池重用與縮池、並發拒絕與淘汰順序、駐留／非同步持有及回呼重入。本機量測輸出的 20 組配置事件中位數與 §5.24 修改前基準完全相同（`perf-review-fixes-baseline-20261014.csv` 與 `perf-structure-run1-20261014.csv`），只代表配置事件次數，不代表 bytes 或 CPU。新增 `AudioAdmission.cs`、`AudioSourcePool.cs` 及 Unity 產生的 `.meta`。XML／log 位於 `work/stage-two-hardening/structure-{run1,editor-run1}-20261014.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
 
+### 5.27 守衛一致性、殘留 enum 順序與設定綁定整理
+
+記錄日期：2026-10-14。依使用者指定，完成第三次程式碼檢視中「技術債明確、風險低」的四項，從 `4bf6973` 開始修改，未提交。公開 API、Prefab、序列化欄位與行為不變。
+
+| 項目 | 處理 |
+| --- | --- |
+| 1 enum 順序殘留 | `AudioSettingsPlayerPrefs` 的 `new float[4]`、`(AudioChannel)i`，以及用 0～3 整數索引的 `Key`／`Default`，改用 `AudioChannel` 與 `AudioMixerLayout.Channels`。這是 §5.25 第 1 項漏掉的最後一處；正式程式現在只有 `AudioMixerLayout` 依賴 enum 順序 |
+| 2 旗標參數 | `AudioMixerState.BindSettings(handler, active, applyStored)` 改為 `ReplaceSettings(handler)`，由呼叫端再呼叫既有的 `AttachSettings`。`Initialize` 原本以 `(…, true, true)` 呼叫的 if/else 合成兩行 |
+| 3 Controller 守衛 | 新增 `ReadyEngine`：停止、FadeBus、暫停、靜音、預熱、縮池、釋放、來源刷新與路由更新等命令，以及 Update 與 Unity 事件，一律經過它，取代 `Ready && engine != null ? … : 0`、`engine?.`、`if (Ready && …) engine.`、`!Ready \|\| engine == null` 四種寫法。唯讀診斷與設定值轉送仍讀取現有引擎。`MixerState.Apply(); ValidateMixer();` 三處合為 `ApplyMixer()`；只做 verbose 記錄的 `ReportFailure` 改名 `LogVerbose`，與另外兩個去重警告方法區分 |
+| 4 Resources key | `TryGetCachedClip`、`TryAcquireClip`、`DescribeLookup` 共用 `KeyOf`，修正查快取時少了 `?? Id` 的不一致 |
+
+**易用性檢查：** 使用流程、公開 API 與診斷文字不變，屬純內部整理。
+
+**維護性檢查：** 引擎守衛只剩一種寫法，規則寫在 `ReadyEngine` 的註解；最後一處 enum 順序耦合已移除；設定綁定不再需要讀兩個布林值。唯一差異是 Shutdown 回呼期間（Ready 已為 false、引擎仍存在）呼叫的命令不再轉送；此時引擎已停用，原本的轉送也沒有效果。`AudioCatalog` 驗證裡同樣的 `ResourcesKey ?? Id` 規則屬於編輯資料型別，暫不合併。
+
+**驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；既有測試未修改，也未新增測試。本機量測的 20 組配置事件中位數與 §5.26 相同。XML／log 位於 `work/stage-two-hardening/guards-{run1,editor-run1}-20261014.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1460,6 +1477,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成專案審查七項修正（BGM 轉場取消、換場快取、裝置變更、例外記錄、重複 Controller、API 一致性、§2.2 格式與欄位名稱）；PlayMode 395／395、EditMode 28／28 通過，破壞性變更見 Migration.md 與 §5.24。
 - [x] 完成 enum 順序耦合集中、失敗 handle 工廠與具體原因、冗長條件具名化、語法整理及旗標參數拆分；PlayMode 402／402、EditMode 29／29 通過，見 §5.25。
 - [x] 完成 ClipHold 素材持有、Finish／Store.Request 拆分及 AudioSourcePool／AudioAdmission 抽出；PlayMode 402／402、EditMode 29／29 通過，見 §5.26。
+- [x] 完成 PlayerPrefs 通道索引、設定綁定旗標、Controller 守衛統一與 Resources key 解析整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.27。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1509,3 +1527,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.29 | 2026-10-14 | 依專案審查修正七項：BGM 轉場取消不跳音、Single 換場自動釋放普通快取、裝置變更保留並重播循環、記錄 Provider 例外、提示設定不同的重複 Controller、`PlayIndependent`／`StopAll` 並移除 Preload 與 stopAfter、欄位改名與一行一個狀態變更；PlayMode 395／395、EditMode 28／28 通過，見 §5.24 |
 | 1.30 | 2026-10-14 | 集中通道／分類對應與分類遮罩、合併引擎分類狀態；統一失敗 handle 並拆出具體原因；冗長條件改具名判斷、語法整理、拆除暫停與來源刷新的旗標參數；PlayMode 402／402、EditMode 29／29 通過，見 §5.25 |
 | 1.31 | 2026-10-14 | 合併 Playback 的兩種素材持有為 ClipHold；拆分 Finish 與 AudioClipStore.Request；從引擎抽出聲源池與並發接納；PlayMode 402／402、EditMode 29／29 通過，配置事件與修改前相同，見 §5.26 |
+| 1.32 | 2026-10-14 | 移除最後一處 enum 順序耦合；拆掉設定綁定的旗標參數；Controller 命令統一經過 ReadyEngine 並合併 Mixer 套用；Resources key 解析共用；PlayMode 402／402、EditMode 29／29 通過，見 §5.27 |
