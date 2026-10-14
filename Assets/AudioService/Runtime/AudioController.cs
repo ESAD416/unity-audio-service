@@ -36,9 +36,12 @@ namespace Controller.Audio
         private bool providerConfigured, settingsConfigured, providerSubscribed, shuttingDown;
         private AudioPlaybackEngine engine;
         private AudioMixerState mixerState;
-        private AudioMixerState MixerState => mixerState ??= new AudioMixerState(categories => engine?.RefreshGains(categories), (channel, value) => VolumeChanged?.Invoke(channel, value));
+        private AudioMixerState MixerState => mixerState ??= new AudioMixerState(categories => ReadyEngine?.RefreshGains(categories), (channel, value) => VolumeChanged?.Invoke(channel, value));
         public static AudioController Instance { get; private set; }
         public bool Ready { get; private set; }
+        // Commands reach only a ready engine. During Shutdown callbacks the engine still
+        // exists but is no longer ready; read-only diagnostics may still read it.
+        private AudioPlaybackEngine ReadyEngine => Ready ? engine : null;
 
         public event Action<AudioChannel, float> VolumeChanged;
         public IAudioClipProvider ClipProvider => AudioValues.Alive(clipProvider) ? clipProvider : null;
@@ -179,19 +182,16 @@ namespace Controller.Audio
         private void OnApplicationPause(bool paused)
         {
             if (pauseOnBackground)
-                engine?.SetBackgroundPaused(paused);
+                ReadyEngine?.SetBackgroundPaused(paused);
         }
 
         private void Update()
         {
-            var current = engine;
-            if (!Ready || current == null)
+            var current = ReadyEngine;
+            if (current == null)
                 return;
             if (!MixerState.Applied)
-            {
-                MixerState.Apply();
-                ValidateMixer();
-            }
+                ApplyMixer();
 
             if (clipProvider != null && !AudioValues.Alive(clipProvider))
             {
@@ -206,7 +206,7 @@ namespace Controller.Audio
 
         // A callback may shut down and initialize again before the old call returns.
         private bool IsCurrentEngine(AudioPlaybackEngine expected)
-            => Ready && expected != null && ReferenceEquals(engine, expected) && this != null && isActiveAndEnabled;
+            => expected != null && ReferenceEquals(ReadyEngine, expected) && this != null && isActiveAndEnabled;
 
         private void AttachUnityEvents()
         {
@@ -225,19 +225,19 @@ namespace Controller.Audio
         // playback cache at the same boundary; playing sounds and PrepareClip groups keep their clips.
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
-            if (mode == LoadSceneMode.Single && Ready)
-                engine?.ReleaseUnused();
+            if (mode == LoadSceneMode.Single)
+                ReadyEngine?.ReleaseUnused();
         }
 
         private void OnAudioConfigurationChanged(bool deviceWasChanged)
         {
-            if (!Ready || engine == null)
+            var current = ReadyEngine;
+            if (current == null)
                 return;
-            using var mutation = engine.BeginMutation();
+            using var mutation = current.BeginMutation();
             MixerState.Configure(mixer);
-            engine.AudioConfigurationChanged();
-            MixerState.Apply();
-            ValidateMixer();
+            current.AudioConfigurationChanged();
+            ApplyMixer();
         }
 
         public void SetClipProvider(IAudioClipProvider provider)
@@ -248,22 +248,20 @@ namespace Controller.Audio
             failureLog = null;
             DetachProviderNotifications();
             clipProvider = provider;
-            engine?.SetProvider(provider);
+            ReadyEngine?.SetProvider(provider);
             AttachProviderNotifications();
         }
 
         public void RefreshClipProvider()
         {
             BeginClipStateRefresh();
-            if (Ready)
-                engine?.RefreshLookup(ClipProvider);
+            ReadyEngine?.RefreshLookup(ClipProvider);
         }
 
         private void RefreshCatalog()
         {
             BeginClipStateRefresh();
-            if (Ready)
-                engine?.ResetStore(ClipProvider);
+            ReadyEngine?.ResetStore(ClipProvider);
         }
 
         // New lookups and mappings start with fresh warnings and the current catalog binding.
@@ -314,9 +312,9 @@ namespace Controller.Audio
 
         private bool TryResolve(AudioCategory category, AudioId id, out AudioPlaybackEngine current, out ResolvedAudioClip address)
         {
-            current = engine;
+            current = ReadyEngine;
             address = default;
-            if (!Ready || current == null)
+            if (current == null)
                 return false;
             SyncCatalog();
             if (!IsCurrentEngine(current))
@@ -330,8 +328,8 @@ namespace Controller.Audio
         {
             if (clip != null)
             {
-                if (Ready && engine != null)
-                    return engine.Play(category, null, clip, options, slot, id);
+                if (ReadyEngine is { } ready)
+                    return ready.Play(category, null, clip, options, slot, id);
             }
             else if (TryResolve(category, id, out var current, out var address))
                 return current.Play(category, address, null, options, slot, id);
@@ -344,28 +342,28 @@ namespace Controller.Audio
         /// BGM loops only when PlayOptions.Loop is set. Daily playback uses AudioService.</summary>
         public AudioHandle PlayIndependent(AudioCategory category, AudioId id, PlayOptions options = null) => Request(category, id, null, options, PlaybackSlot.None);
         public AudioHandle PlayIndependent(AudioCategory category, AudioClip clip, PlayOptions options = null) => Request(category, default, clip, options, PlaybackSlot.None);
-        public void StopBgm(float fadeOutSeconds = 0) => engine?.StopCategory(AudioCategory.Bgm, AudioValues.Seconds(fadeOutSeconds));
-        public void StopSfx(float fadeOutSeconds = 0) => engine?.StopCategory(AudioCategory.Sfx, AudioValues.Seconds(fadeOutSeconds));
-        public void StopVoice(float fadeOutSeconds = 0) => engine?.StopCategory(AudioCategory.Voice, AudioValues.Seconds(fadeOutSeconds));
-        public void StopAll(float fadeOutSeconds = 0) => engine?.StopCategory(null, AudioValues.Seconds(fadeOutSeconds));
+        public void StopBgm(float fadeOutSeconds = 0) => ReadyEngine?.StopCategory(AudioCategory.Bgm, AudioValues.Seconds(fadeOutSeconds));
+        public void StopSfx(float fadeOutSeconds = 0) => ReadyEngine?.StopCategory(AudioCategory.Sfx, AudioValues.Seconds(fadeOutSeconds));
+        public void StopVoice(float fadeOutSeconds = 0) => ReadyEngine?.StopCategory(AudioCategory.Voice, AudioValues.Seconds(fadeOutSeconds));
+        public void StopAll(float fadeOutSeconds = 0) => ReadyEngine?.StopCategory(null, AudioValues.Seconds(fadeOutSeconds));
         public void FadeBus(AudioChannel channel, float targetVolume, float seconds)
         {
-            if (Ready && AudioValues.IsValidChannel(channel))
-                engine.FadeBus(channel, AudioValues.Unit(targetVolume), AudioValues.Seconds(seconds));
+            if (AudioValues.IsValidChannel(channel))
+                ReadyEngine?.FadeBus(channel, AudioValues.Unit(targetVolume), AudioValues.Seconds(seconds));
         }
 
-        public void SetGamePaused(bool paused) => engine?.SetGamePaused(paused);
-        public void SetBackgroundPaused(bool paused) => engine?.SetBackgroundPaused(paused);
+        public void SetGamePaused(bool paused) => ReadyEngine?.SetGamePaused(paused);
+        public void SetBackgroundPaused(bool paused) => ReadyEngine?.SetBackgroundPaused(paused);
         public void SetMuted(AudioChannel channel, bool muted)
         {
             if (AudioValues.IsValidChannel(channel))
-                engine?.SetMuted(channel, muted);
+                ReadyEngine?.SetMuted(channel, muted);
         }
 
         /// <summary>Grow total source capacity (active + idle). Call during loading; does not load clips.</summary>
-        public int PrewarmSources(int targetCount) => Ready && engine != null ? engine.PrewarmSources(targetCount) : 0;
+        public int PrewarmSources(int targetCount) => ReadyEngine?.PrewarmSources(targetCount) ?? 0;
         /// <summary>Remove only idle sources, retaining minimumCapacity total sources.</summary>
-        public int TrimIdleSources(int minimumCapacity = 0, int maxToRemove = 32) => Ready && engine != null ? engine.TrimIdleSources(minimumCapacity, maxToRemove) : 0;
+        public int TrimIdleSources(int minimumCapacity = 0, int maxToRemove = 32) => ReadyEngine?.TrimIdleSources(minimumCapacity, maxToRemove) ?? 0;
 
         /// <summary>Retain a clip until group release, completing when Unity reports its audio data loaded.</summary>
         public void PrepareClip(AudioCategory category, AudioId id, string group, Action<bool> completed = null)
@@ -381,10 +379,10 @@ namespace Controller.Audio
         public void ReleaseGroup(string group)
         {
             if (!string.IsNullOrWhiteSpace(group))
-                engine?.ReleaseGroup(group);
+                ReadyEngine?.ReleaseGroup(group);
         }
 
-        public void ReleaseUnusedClips() => engine?.ReleaseUnused();
+        public void ReleaseUnusedClips() => ReadyEngine?.ReleaseUnused();
         public bool TryGetCachedClip(AudioCategory category, AudioId id, out AudioClip clip)
         {
             clip = null;
@@ -418,7 +416,12 @@ namespace Controller.Audio
             mixer = value;
             loadDefaultMixer = false;
             MixerState.Configure(value);
-            engine?.RefreshRouting();
+            ReadyEngine?.RefreshRouting();
+            ApplyMixer();
+        }
+
+        private void ApplyMixer()
+        {
             MixerState.Apply();
             ValidateMixer();
         }
@@ -427,13 +430,13 @@ namespace Controller.Audio
         {
             bool valid = MixerState.Validate();
             if (!valid)
-                ReportFailure(LastMixerIssue);
+                LogVerbose(LastMixerIssue);
             return valid;
         }
 
         internal void ConfigureSource(AudioSource source, AudioCategory category) => MixerState.ConfigureSource(source, category);
         internal float SourceSettingsGain(AudioCategory category) => MixerState.SourceGain(category);
-        internal void ReportFailure(string message)
+        internal void LogVerbose(string message)
         {
             if (verboseLogging)
                 Debug.LogWarning("[AudioController] " + message, this);

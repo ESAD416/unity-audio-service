@@ -328,7 +328,7 @@ namespace Controller.Audio
         private void RecordFailure(string reason)
         {
             LastFailure = reason;
-            host.ReportFailure(reason);
+            host.LogVerbose(reason);
         }
 
         private void Loaded(Playback playback, ClipHold hold, ResolvedAudioClip? address = null)
