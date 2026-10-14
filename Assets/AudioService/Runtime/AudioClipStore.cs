@@ -163,8 +163,10 @@ namespace Controller.Audio
                     else
                         AcquireAsync(address, entry);
                 }
-                catch (Exception)
+                catch (Exception error)
                 {
+                    // A throwing provider is a failed load; keep its stack trace visible.
+                    Debug.LogException(error);
                     Complete(entry, null);
                 }
             }

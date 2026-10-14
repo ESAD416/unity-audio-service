@@ -53,8 +53,9 @@ namespace Controller.Audio
                     }
                     Check(preparation);
                 }
-                catch (Exception)
+                catch (Exception error)
                 {
+                    Debug.LogException(error);
                     Finish(preparation, false);
                 }
             }, group);

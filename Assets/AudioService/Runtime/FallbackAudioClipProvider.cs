@@ -130,8 +130,9 @@ namespace Controller.Audio
                 {
                     acquired = TryAcquireClip(address, out immediate);
                 }
-                catch (Exception)
+                catch (Exception error)
                 {
+                    Debug.LogException(error);
                     callbacks.Release(immediate);
                     Deliver(completed, null);
                     return;
@@ -207,8 +208,9 @@ namespace Controller.Audio
                     }
                 });
             }
-            catch (Exception)
+            catch (Exception error)
             {
+                Debug.LogException(error);
                 Finish(null);
             }
         }
@@ -225,8 +227,9 @@ namespace Controller.Audio
             {
                 provider.AcquireClip(address, completed);
             }
-            catch (Exception)
+            catch (Exception error)
             {
+                Debug.LogException(error);
                 completed(null);
             }
         }
