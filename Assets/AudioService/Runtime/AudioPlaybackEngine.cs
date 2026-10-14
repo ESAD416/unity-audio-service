@@ -497,7 +497,7 @@ namespace Controller.Audio
             playback.Emitter = state?.Current?.Emitter ?? Rent();
             playback.Emitter.Pending = playback;
             var emitter = playback.Emitter;
-            if (emitter.Current != null && playback.Slot == PlaybackSlot.Bgm && playback.Options.FadeOutSeconds > 0 && emitter.Source.isPlaying)
+            if (FadesOutCurrentMusic(playback, emitter))
             {
                 emitter.Transition = new Tween
                 {
@@ -511,6 +511,11 @@ namespace Controller.Audio
             else
                 Start(playback);
         }
+
+        // BGM replacement fades the audible current music out before starting the new one.
+        private static bool FadesOutCurrentMusic(Playback incoming, Emitter emitter)
+            => incoming.Slot == PlaybackSlot.Bgm && incoming.Options.FadeOutSeconds > 0
+                && emitter.Current != null && emitter.Source.isPlaying;
 
         private void Start(Playback playback)
         {
@@ -856,13 +861,21 @@ namespace Controller.Audio
 
                 if (envelopeChanged || (gainsChanged && NeedsGain(emitter, changedCategories)))
                     ApplyGain(emitter);
-                var p = emitter.Current;
-                if (p != null && p.Handle.State == AudioPlaybackState.Playing && !p.Options.Loop && Time.frameCount > p.StartedFrame + 1 && !emitter.Source.isPlaying)
-                    Finish(p, AudioCompletion.Completed);
+                if (EndedNaturally(emitter))
+                    Finish(emitter.Current, AudioCompletion.Completed);
                 // Recycle swaps the last active emitter into this position.
                 if (iSource < updating.Count && ReferenceEquals(updating[iSource], emitter))
                     iSource++;
             }
+        }
+
+        // A playing one-shot whose native source stopped by itself. The start frame
+        // and the next one are a grace period before isPlaying is trusted.
+        private static bool EndedNaturally(Emitter emitter)
+        {
+            var p = emitter.Current;
+            return p != null && p.Handle.State == AudioPlaybackState.Playing && !p.Options.Loop
+                && Time.frameCount > p.StartedFrame + 1 && !emitter.Source.isPlaying;
         }
 
         public void PrepareClip(ResolvedAudioClip address, string group, Action<bool> completed)

@@ -20,6 +20,9 @@ namespace Controller.Audio
             public string LookupKey;
             public List<string> OtherLookupKeys;
             public readonly List<Request> Waiters = new();
+            public bool IsAvailable => Complete && !Released && Clip != null;
+            // A delivery batch, a lease or an unfinished waiter keeps the native handle.
+            public bool InUse => Deliveries > 0 || Users > 0 || Waiters.Exists(r => !r.Finished);
         }
 
         private sealed class Request
@@ -50,9 +53,11 @@ namespace Controller.Audio
         private bool TryGetCompletedOperation(string key, out Operation op)
         {
             op = null;
-            return !destroyed && !string.IsNullOrWhiteSpace(key) && aliases.TryGetValue(key, out op)
-                && op.Complete && !op.Released && op.Clip != null;
+            return !destroyed && !string.IsNullOrWhiteSpace(key) && aliases.TryGetValue(key, out op) && op.IsAvailable;
         }
+
+        // A refresh or destroy invalidates every request issued before it.
+        private bool IsCurrent(Request request) => !destroyed && request.Generation == generation;
 
         public void AcquireClip(ResolvedAudioClip address, Action<AudioClipLease> completed) => Acquire(address.AddressablesKey, completed);
         public bool TryAcquireClip(ResolvedAudioClip address, out AudioClipLease lease)
@@ -115,9 +120,7 @@ namespace Controller.Audio
             request.Locations.Completed += handle =>
             {
                 using var delivery = callbacks.Begin();
-                IResourceLocation location = null;
-                if (!request.Finished && !destroyed && request.Generation == generation && handle.IsValid() && handle.Status == AsyncOperationStatus.Succeeded && handle.Result.Count > 0)
-                    location = handle.Result[0];
+                var location = !request.Finished && IsCurrent(request) ? FirstLocation(handle) : null;
                 ReleaseLocations(request);
                 if (request.Finished)
                     return;
@@ -131,6 +134,9 @@ namespace Controller.Audio
                 Resolve(request, location);
             };
         }
+
+        private static IResourceLocation FirstLocation(AsyncOperationHandle<IList<IResourceLocation>> handle)
+            => handle.IsValid() && handle.Status == AsyncOperationStatus.Succeeded && handle.Result.Count > 0 ? handle.Result[0] : null;
 
         private void Resolve(Request request, IResourceLocation location)
         {
@@ -240,7 +246,7 @@ namespace Controller.Audio
             request.Finished = true;
             requests.Remove(request);
             AudioClipLease lease = null;
-            if (!destroyed && request.Generation == generation && op != null && !op.Released && op.Clip != null)
+            if (IsCurrent(request) && op != null && op.IsAvailable)
                 lease = CreateLease(op);
 
             var callback = request.Callback;
@@ -263,7 +269,7 @@ namespace Controller.Audio
 
         private void ReleaseIfUnused(Operation op)
         {
-            if (op.Released || op.Deliveries > 0 || op.Users > 0 || op.Waiters.Exists(r => !r.Finished))
+            if (op.Released || op.InUse)
                 return;
             op.Released = true;
             op.Clip = null;

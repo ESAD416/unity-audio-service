@@ -20,6 +20,10 @@ namespace Controller.Audio
             public int Users;
             public readonly HashSet<string> Groups = new();
             public readonly List<Waiter> Waiters = new();
+            public bool HasClip => Lease?.Clip != null;
+            public bool IsResident => !Loading && HasClip;
+            // Finished loading without a clip; a synchronous retry may replace it before cleanup.
+            public bool Failed => !Loading && !HasClip;
         }
 
         // Internal playback owns this value in exactly one field. Clear that field
@@ -60,7 +64,7 @@ namespace Controller.Audio
             cached = users = loading = 0;
             foreach (var entry in entries.Values)
             {
-                if (entry.Lease?.Clip != null)
+                if (entry.HasClip)
                     cached++;
                 users += entry.Users;
                 if (entry.Loading)
@@ -75,6 +79,7 @@ namespace Controller.Audio
         }
 
         private static (AudioCategory, string) Key(ResolvedAudioClip address) => (address.Category, address.Id);
+        private bool Usable => !disposed && AudioValues.Alive(provider);
         public bool TryGetCached(ResolvedAudioClip address, out AudioClip clip)
         {
             clip = null;
@@ -86,7 +91,7 @@ namespace Controller.Audio
         public bool TryAcquireResident(AudioCategory category, string id, out Usage usage)
         {
             usage = default;
-            if (disposed || !AudioValues.Alive(provider) || !entries.TryGetValue((category, id), out var entry) || entry.Loading || entry.Lease?.Clip == null)
+            if (!Usable || !entries.TryGetValue((category, id), out var entry) || !entry.IsResident)
                 return false;
             // Ordinary playback retains the entry exactly as Request(group: null).
             entry.Retained = true;
@@ -108,17 +113,14 @@ namespace Controller.Audio
         public Action Request(ResolvedAudioClip address, bool allowAsync, Action<AudioClipLease> callback, string group = null)
         {
             using var mutation = callbacks.Begin();
-            if (disposed || !AudioValues.Alive(provider))
+            if (!Usable)
             {
                 AudioCallbacks.Deliver(callback, null);
                 return NoCancellation;
             }
 
             var key = Key(address);
-            bool created = !entries.TryGetValue(key, out var entry);
-            // A failed delivery can synchronously retry before its old entry is cleaned up.
-            if (!created && !entry.Loading && entry.Lease?.Clip == null)
-                created = true;
+            bool created = !entries.TryGetValue(key, out var entry) || entry.Failed;
             if (!created && entry.Loading && !allowAsync)
             {
                 AudioCallbacks.Deliver(callback, null);
@@ -233,7 +235,7 @@ namespace Controller.Audio
                 if (callback == null)
                     continue;
                 AudioClipLease lease = null;
-                if (!disposed && entry.Lease?.Clip != null)
+                if (!disposed && entry.HasClip)
                     lease = AcquireUser(entry);
                 deliveries[next++] = (callback, lease);
             }
@@ -243,11 +245,13 @@ namespace Controller.Audio
                 AudioCallbacks.Deliver(delivery.callback, delivery.lease);
         }
 
+        // Loading and active users always hold an entry; a cached clip also stays while it is retained or grouped.
+        private bool IsHeld(Entry entry)
+            => entry.Loading || entry.Users > 0 || (!disposed && entry.HasClip && (entry.Retained || entry.Groups.Count > 0));
+
         private void Cleanup(Entry entry)
         {
-            if (entry.Loading || entry.Users > 0)
-                return;
-            if (!disposed && entry.Lease?.Clip != null && (entry.Retained || entry.Groups.Count > 0))
+            if (IsHeld(entry))
                 return;
             if (entries.TryGetValue(entry.Key, out var current) && ReferenceEquals(entry, current))
                 entries.Remove(entry.Key);
