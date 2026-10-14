@@ -46,6 +46,7 @@ namespace Controller.Audio
             public float Envelope = 1f;
             public Tween Transition;
             public Playback Current, Pending;
+            public bool InUse => Current != null || Pending != null;
         }
 
         // What keeps a playback's clip valid: a lease from an asynchronous store delivery,
@@ -100,13 +101,11 @@ namespace Controller.Audio
         internal void NotifyCompleted(Action callback) => callbacks.Enqueue(callback);
         internal AudioCallbackQueue.Scope BeginMutation() => callbacks.Begin();
         private readonly AudioController host;
+        // Accepted requests in admission order, including Loading and Paused.
         private readonly List<Playback> active = new();
         private readonly Stack<List<Playback>> snapshots = new();
-        private Dictionary<(AudioCategory, AudioId), int> audioCounts;
-        private bool audioCountsActive;
-        private readonly List<Emitter> emitters = new();
-        private readonly List<Emitter> updating = new();
-        private readonly Stack<Emitter> pool = new();
+        private readonly AudioAdmission admission;
+        private readonly AudioSourcePool sources;
         private readonly SlotState bgm = new();
         private readonly SlotState dialogue = new();
         private SlotState GetSlot(PlaybackSlot slot) => slot switch
@@ -138,12 +137,23 @@ namespace Controller.Audio
         }
 
         public string LastFailure { get; private set; }
-        public int MaxConcurrentSounds { get; set; }
-        public AudioConcurrencyPolicy ConcurrencyPolicy { get; set; }
+        public int MaxConcurrentSounds
+        {
+            get => admission.MaxConcurrentSounds;
+            set => admission.MaxConcurrentSounds = value;
+        }
+
+        public AudioConcurrencyPolicy ConcurrencyPolicy
+        {
+            get => admission.ConcurrencyPolicy;
+            set => admission.ConcurrencyPolicy = value;
+        }
 
         public AudioPlaybackEngine(AudioController host, IAudioClipProvider provider)
         {
             this.host = host;
+            admission = new AudioAdmission(active);
+            sources = new AudioSourcePool(host.transform);
             Array.Fill(buses, new Bus { Gain = 1 });
             listenerPaused = AudioListener.pause;
             preparations = new AudioPreparationQueue(callbacks);
@@ -193,166 +203,36 @@ namespace Controller.Audio
             snapshots.Push(snapshot);
         }
 
-        private int CountAudio(AudioHandle handle)
-        {
-            // Build only when a per-audio limit is used. Keep ordinary unlimited
-            // sessions free of index maintenance, including after a busy scene ends.
-            if (!audioCountsActive)
-            {
-                audioCounts ??= new Dictionary<(AudioCategory, AudioId), int>();
-                audioCounts.Clear();
-                foreach (var p in active)
-                    IncrementAudio(p.Handle);
-                audioCountsActive = true;
-            }
-
-            audioCounts.TryGetValue((handle.Category, handle.AudioId), out int count);
-            return count;
-        }
-
-        private void IncrementAudio(AudioHandle handle)
-        {
-            var key = (handle.Category, handle.AudioId);
-            audioCounts.TryGetValue(key, out int count);
-            audioCounts[key] = count + 1;
-        }
-
         private void AddActive(Playback playback)
         {
             active.Add(playback);
             playback.Handle.Playback = playback;
-            if (audioCountsActive)
-                IncrementAudio(playback.Handle);
+            admission.Added(playback);
         }
 
         private void RemoveActive(Playback playback)
         {
             playback.Handle.Playback = null;
-            if (!active.Remove(playback) || !audioCountsActive)
-                return;
-            var key = (playback.Handle.Category, playback.Handle.AudioId);
-            int remaining = audioCounts[key] - 1;
-            if (remaining == 0)
-                audioCounts.Remove(key);
-            else
-                audioCounts[key] = remaining;
-            if (active.Count == 0)
-                audioCountsActive = false;
-        }
-
-        private Emitter CreateEmitter()
-        {
-            var go = new GameObject("AudioEmitter");
-            go.transform.SetParent(host.transform, false);
-            var source = go.AddComponent<AudioSource>();
-            source.playOnAwake = false;
-            source.spatialBlend = 0;
-            source.Stop();
-            var emitter = new Emitter
-            {
-                Source = source
-            };
-            emitters.Add(emitter);
-            return emitter;
+            if (active.Remove(playback))
+                admission.Removed(playback);
         }
 
         public int PrewarmSources(int targetCount)
         {
             if (disposed || !host.Ready || targetCount <= 0)
                 return 0;
-            int missing = targetCount - emitters.Count;
-            if (missing <= 0)
-                return 0;
-            for (int i = 0; i < missing; i++)
-            {
-                var emitter = CreateEmitter();
-                emitter.InPool = true;
-                pool.Push(emitter);
-            }
-
-            // Reserve the bookkeeping arrays as well as native sources. Idle
-            // emitters stay out of updating and acquire current gains on Start.
-            if (active.Capacity < emitters.Count)
-                active.Capacity = emitters.Count;
-            if (updating.Capacity < emitters.Count)
-                updating.Capacity = emitters.Count;
-            return missing;
+            int created = sources.Prewarm(targetCount);
+            // Reserve playback bookkeeping as well as native sources.
+            if (created > 0 && active.Capacity < sources.Count)
+                active.Capacity = sources.Count;
+            return created;
         }
 
         public int TrimIdleSources(int minimumCapacity, int maxToRemove)
         {
             if (disposed || !host.Ready || maxToRemove <= 0)
                 return 0;
-            minimumCapacity = Mathf.Max(0, minimumCapacity);
-            int removed = 0;
-            while (removed < maxToRemove && pool.Count > 0 && emitters.Count > minimumCapacity)
-            {
-                var emitter = pool.Pop();
-                emitter.InPool = false;
-                emitters.Remove(emitter);
-                removed++;
-                UnityEngine.Object.Destroy(emitter.Source.gameObject);
-            }
-
-            return removed;
-        }
-
-        private Emitter Rent()
-        {
-            Emitter emitter;
-            if (pool.Count > 0)
-            {
-                emitter = pool.Pop();
-                emitter.InPool = false;
-            }
-            else
-                emitter = CreateEmitter();
-            Activate(emitter);
-            return emitter;
-        }
-
-        private void Activate(Emitter emitter)
-        {
-            if (emitter.UpdateIndex >= 0)
-                return;
-            emitter.UpdateIndex = updating.Count;
-            updating.Add(emitter);
-        }
-
-        private void Deactivate(Emitter emitter)
-        {
-            int index = emitter.UpdateIndex;
-            if (index < 0)
-                return;
-            int last = updating.Count - 1;
-            updating[index] = updating[last];
-            updating[index].UpdateIndex = index;
-            updating.RemoveAt(last);
-            emitter.UpdateIndex = -1;
-        }
-
-        private void Recycle(Emitter emitter)
-        {
-            if (emitter == null || emitter.Current != null || emitter.Pending != null)
-                return;
-            Deactivate(emitter);
-            emitter.Transition = default;
-            emitter.Envelope = 1;
-            var source = emitter.Source;
-            source.Stop();
-            source.clip = null;
-            source.loop = false;
-            source.pitch = 1;
-            source.mute = false;
-            source.ignoreListenerPause = false;
-            source.outputAudioMixerGroup = null;
-            source.spatialBlend = 0;
-            source.transform.localPosition = Vector3.zero;
-            if (!emitter.InPool)
-            {
-                emitter.InPool = true;
-                pool.Push(emitter);
-            }
+            return sources.Trim(Mathf.Max(0, minimumCapacity), maxToRemove);
         }
 
         public AudioHandle Play(AudioCategory category, ResolvedAudioClip? address, AudioClip direct, PlayOptions supplied, PlaybackSlot slot = PlaybackSlot.None, AudioId id = default)
@@ -376,8 +256,13 @@ namespace Controller.Audio
             int maxInstances = Mathf.Max(0, supplied?.MaxInstances ?? 0);
             if (maxInstances == 0 && address.HasValue)
                 maxInstances = Mathf.Max(0, address.Value.MaxInstances);
-            if (!TryPlanAdmission(handle, slot, maxInstances, supplied?.ConcurrencyPolicy ?? AudioConcurrencyPolicy.RejectNew, out var victims))
+            string rejected = admission.Plan(handle, slot, maxInstances, supplied?.ConcurrencyPolicy ?? AudioConcurrencyPolicy.RejectNew, out var victims);
+            if (rejected != null)
+            {
+                Reject(handle, AudioCompletion.Rejected, rejected);
                 return handle;
+            }
+
             StartAccepted(handle, key, address, direct, supplied, slot, victims);
             return handle;
         }
@@ -432,68 +317,6 @@ namespace Controller.Audio
                 playback.CancelLoad = cancel;
         }
 
-        private bool TryPlanAdmission(AudioHandle incoming, PlaybackSlot slot, int maxInstances, AudioConcurrencyPolicy policy, out Playback[] victims)
-        {
-            victims = null;
-            if (MaxConcurrentSounds <= 0 && maxInstances <= 0)
-                return true;
-            bool replacesSlot = slot != PlaybackSlot.None;
-            int count = active.Count, same = 0;
-            // Replacement slots exclude their current/pending requests; retain
-            // their scan. Ordinary requests can count Loading/Paused via the index.
-            if (replacesSlot)
-            {
-                count = 0;
-                foreach (var p in active)
-                {
-                    if (p.Slot == slot)
-                        continue;
-                    count++;
-                    if (maxInstances > 0 && SameAudio(p, incoming))
-                        same++;
-                }
-            }
-            else if (maxInstances > 0)
-                same = CountAudio(incoming);
-            // Decide every limit before stopping anything. Per-audio evictions also
-            // free global capacity; lowered limits may require more than one victim.
-            int soundVictims = maxInstances > 0 ? Mathf.Max(0, same - maxInstances + 1) : 0;
-            if (soundVictims > 0 && policy == AudioConcurrencyPolicy.RejectNew)
-            {
-                Reject(incoming, AudioCompletion.Rejected, "Per-audio concurrency limit");
-                return false;
-            }
-
-            int globalVictims = MaxConcurrentSounds > 0 ? Mathf.Max(0, count - soundVictims - MaxConcurrentSounds + 1) : 0;
-            if (globalVictims > 0 && ConcurrencyPolicy == AudioConcurrencyPolicy.RejectNew)
-            {
-                Reject(incoming, AudioCompletion.Rejected, "Global concurrency limit");
-                return false;
-            }
-
-            int victimCount = soundVictims + globalVictims;
-            if (victimCount == 0)
-                return true;
-            // Preserve per-audio-first, then global-oldest order. Only accepted
-            // requests that actually evict allocate a candidate snapshot.
-            victims = new Playback[victimCount];
-            int soundIndex = 0, globalIndex = soundVictims;
-            foreach (var p in active)
-            {
-                if (replacesSlot && p.Slot == slot)
-                    continue;
-                if (soundIndex < soundVictims && SameAudio(p, incoming))
-                    victims[soundIndex++] = p;
-                else if (globalIndex < victimCount)
-                    victims[globalIndex++] = p;
-                if (soundIndex == soundVictims && globalIndex == victimCount)
-                    break;
-            }
-
-            return true;
-        }
-
-        private static bool SameAudio(Playback playback, AudioHandle handle) => playback.Handle.Category == handle.Category && playback.Handle.AudioId.Equals(handle.AudioId);
         private void Reject(AudioHandle handle, AudioCompletion result, string reason)
         {
             RecordFailure(reason);
@@ -530,7 +353,7 @@ namespace Controller.Audio
 
             playback.Hold = hold;
             var state = GetSlot(playback.Slot);
-            playback.Emitter = state?.Current?.Emitter ?? Rent();
+            playback.Emitter = state?.Current?.Emitter ?? sources.Rent();
             playback.Emitter.Pending = playback;
             var emitter = playback.Emitter;
             if (FadesOutCurrentMusic(playback, emitter))
@@ -652,7 +475,7 @@ namespace Controller.Audio
                 waiting = emitter.Pending;
             }
 
-            Recycle(emitter);
+            sources.Recycle(emitter);
             return waiting;
         }
 
@@ -829,7 +652,7 @@ namespace Controller.Audio
 
         public void RefreshRouting()
         {
-            foreach (var e in updating)
+            foreach (var e in sources.Active)
             {
                 if (e.Current != null)
                     host.ConfigureSource(e.Source, e.Current.Handle.Category);
@@ -838,7 +661,7 @@ namespace Controller.Audio
 
         public void RefreshGains(CategoryMask categories = CategoryMask.All)
         {
-            foreach (var emitter in updating)
+            foreach (var emitter in sources.Active)
                 if (NeedsGain(emitter, categories))
                     ApplyGain(emitter);
         }
@@ -896,6 +719,7 @@ namespace Controller.Audio
             preparations.Tick();
             var changedCategories = AdvanceBusFades(delta);
             bool gainsChanged = changedCategories != CategoryMask.None;
+            var updating = sources.Active;
             int iSource = 0;
             while (iSource < updating.Count)
             {
@@ -965,8 +789,7 @@ namespace Controller.Audio
             ResetStore(provider);
             for (int i = 0; i < buses.Length; i++)
                 buses[i].Fade = default;
-            foreach (var emitter in emitters)
-                emitter.AppliedGain = float.NaN;
+            sources.ForgetAppliedGains();
             RefreshRouting();
             foreach (var p in active)
                 RestartAfterReset(p);
@@ -1013,7 +836,7 @@ namespace Controller.Audio
                 }
 
                 store.GetCounts(out int cached, out int users, out int pending);
-                return new AudioDiagnostics(playing, paused, loading, pool.Count, emitters.Count, cached, users, pending,
+                return new AudioDiagnostics(playing, paused, loading, sources.IdleCount, sources.Count, cached, users, pending,
                     preparations.Count, LastFailure, gamePaused, backgroundPaused);
             }
         }
@@ -1029,10 +852,7 @@ namespace Controller.Audio
             preparations.CancelAll();
             store.Dispose();
             externalIds = null;
-            foreach (var e in emitters)
-                if (e.Source != null)
-                    UnityEngine.Object.Destroy(e.Source.gameObject);
-            pool.Clear();
+            sources.DestroyAll();
         }
     }
 }
