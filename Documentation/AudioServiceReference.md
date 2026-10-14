@@ -13,7 +13,7 @@
 | `AudioPreparationQueue` | 等待音訊資料 Loaded、一次完成與群組取消；與引擎共用回呼佇列 |
 | `IAudioClipProvider` | 底層素材查詢、取得與 lease 釋放 |
 | `AudioMixerState` | Mixer 路由、音量備援與設定同步；不是額外場景元件 |
-| `AudioMixerLayout` | Runtime 與 Editor 共用的唯讀 Mixer 參數／群組名稱；不是公開 API |
+| `AudioMixerLayout` | Runtime 與 Editor 共用的唯讀 Mixer 參數／群組名稱、通道與分類的對應及分類遮罩；是唯一依賴 enum 順序的地方，不是公開 API |
 | `AudioCatalog` | 編輯資料與不可變執行期解析結果 |
 
 `Runtime/Controller.Audio.asmdef` 不引用 Addressables。`Integrations/Addressables/Controller.Audio.Addressables.asmdef` 依賴核心及 Addressables，依套件存在與否啟用。Editor 與 Samples 只引用核心；UPM 套件 manifest／完整宿主分離尚未完成。
@@ -129,7 +129,7 @@ PrewarmSources(targetCount) 同步補齊使用中＋閒置的**總容量**，回
 
 最終增益由玩家 Master／分類音量、暫時 Master／分類增益、PlayOptions.Volume 及播放包絡組成。SetMuted 不停止、不寫入玩家設定；FadeBus 不改保存音量，也不停止聲音。停止一個分類或全部聲音使用 StopBgm／StopSfx／StopVoice／StopAll(seconds)，只影響呼叫當時的一批聲音，之後的新播放不受舊淡出影響。
 
-Mixer 的群組為 BGM／Sound／Voice，exposed parameters 為 masterVolume／bgmVolume／soundVolume／voiceVolume。有效路由與參數由 Mixer 套用玩家設定，缺少時由 AudioSource 補上相應增益；SetMixer(null) 明確不用 Mixer。ValidateMixer／LastMixerIssue 提供診斷。
+Mixer 的群組為 BGM／Sound／Voice，exposed parameters 為 masterVolume／bgmVolume／soundVolume／voiceVolume。有效路由與參數由 Mixer 套用玩家設定，缺少時由 AudioSource 補上相應增益；SetMixer(null) 明確不用 Mixer。ValidateMixer／LastMixerIssue 提供診斷，回報第一個缺少的參數或群組；Editor Audio checks 會列出全部。
 
 BindSettings 連接 IAudioSettingsHandler。ApplyVolume(..., persist:false) 暫時改值；之後同值的保存操作仍會同步 handler，VolumeChanged 僅在有效值改變時通知。PlayerPrefs 設定保留 debounce 儲存、背景／停用 flush、實際 keys 的 ResetSettings、輸入正規化與事件重入保障。
 

@@ -2,9 +2,9 @@
 
 文件日期：2026-10-14
 
-文件版本：1.29
+文件版本：1.30
 
-狀態：完成專案審查七項修正，本輪完整 PlayMode 395／395、EditMode 28／28 通過（見 5.24）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成 enum 順序耦合、失敗原因與條件判斷整理，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.25）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1223,6 +1223,24 @@ XML／log 位於 `work/stage-two-hardening/conditional-cleanup-20261005.*`；輸
 
 XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,final,editor}-20261014.*`；run1 為測試改名遺漏造成的編譯失敗，run2 為依新行為待調整的 5 項失敗，均保留。本輪未重跑 macOS Player、Resources-only 獨立建置及效能量測；人工聽感、其他平台與 IL2CPP 的驗收界線不變。
 
+### 5.25 enum 順序耦合、失敗原因與條件判斷整理
+
+記錄日期：2026-10-14。依使用者指定，完成程式碼檢視中「技術債明確、風險低」的五項，從 `e0e4689` 開始修改，未提交。公開 API、Prefab 與序列化欄位不變。
+
+| 項目 | 處理 |
+| --- | --- |
+| 1 enum 順序耦合 | `AudioChannel`／`AudioCategory` 的對應、分類遮罩與通道清單集中到 `AudioMixerLayout`，以內部 `CategoryMask` flags 取代 `1／2／4／7`。引擎的分類增益、淡變與靜音三個平行陣列合成 `Bus` 結構陣列；Editor 的 `i < 4` 迴圈與兩組平行名稱陣列改用同一份通道清單。新增 EditMode 測試鎖住 enum 順序 |
+| 2 失敗 handle | 新增內部 `AudioHandle.Failed` 工廠，AudioService 與 Controller 共用；未就緒時 handle 的 `FailureReason` 與 Console 使用同一段含修正步驟的文字。引擎把「Service unavailable or empty audio id/clip」拆成未就緒、無效分類、空 ID 且無 clip 三種原因；失敗原因一律不帶句尾句號，由記錄補上 |
+| 3 冗長條件 | 引擎抽出 `EndedNaturally`、`FadesOutCurrentMusic`、`InvalidRequest`；Store 以 `HasClip`／`IsResident`／`Failed`／`IsHeld`／`Usable` 取代 6 處 `Lease?.Clip` 與長條件；Addressables 以 `IsAvailable`／`InUse`／`IsCurrent`／`FirstLocation` 取代 4 處長條件 |
+| 4 語法整理 | `AudioValues` 改用 `float.IsFinite`；`AudioService.Voice` 改為 switch expression；`SourceGain` 改用區域函式；`Validate` 回報第一個問題（原本迴圈會覆寫，群組檢查又會再蓋掉參數問題）；`AudioDiagnostics` 建構子移除逐輪加上的選用參數，依欄位順序排列 |
+| 5 旗標參數 | 引擎 `SetPaused(paused, background)` 拆成 `SetGamePaused`／`SetBackgroundPaused`；`SetProvider(next, force, refreshLookup)` 拆成 `SetProvider`／`ResetStore`／`RefreshLookup`，Controller 的布林版 `RefreshClipState` 一併移除。重設仍傳入已做存活檢查的 `ClipProvider`，保留來源被銷毀時改為 null 的效果 |
+
+**易用性檢查：** 使用步驟與公開 API 不變。可見差異只有診斷文字：`PlaySfx((AudioClip)null)` 與無效分類各有自己的原因，不再說服務不可用；未就緒時 `FailureReason` 多了修正步驟；Console 不再出現重複句號。
+
+**維護性檢查：** 移除 10 多處依賴 enum 順序的魔術數字與兩組平行陣列，對應只剩 `AudioMixerLayout` 一處並有測試保護；三處失敗 handle 建立合為一個工廠；兩個多旗標方法拆成意圖明確的方法。`ApplyGain` 以 `ref readonly` 讀取 `Bus`，`SourceGain` 的區域函式不轉成委派，預期不增加配置；本輪未重跑量測，不宣稱效能變化。暫不處理：Controller 中 `MixerState.Apply(); ValidateMixer();` 重複三次；`SetVolume` 的三個分類比較仍逐一寫出，三個具名分類比通用迴圈清楚。
+
+**驗證：** Unity 6000.6.3f1 本機修改前為上一輪最終狀態 PlayMode 395／395、EditMode 28／28；修改後完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤。新增 `TechDebtCleanupTests` 7 項（空 clip、無效分類、未就緒 handle 原因、缺少 Controller 與無效語音模式的單一句號、語音模式槽位、Mixer 第一個問題）與 EditMode `AudioMixerLayoutTests` 1 項，既有測試未修改。XML／log 位於 `work/stage-two-hardening/tech-debt-{run1,editor-run1}-20261014.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與量測；人工聽感、其他平台與 IL2CPP 的驗收界線不變。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1424,6 +1442,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成停止相同結果合併、暫停狀態切換及固定映射 switch 整理；本輪七組聚焦 PlayMode 154／154 通過，見 §5.22。
 - [x] 完成 Debug Menu 設定來源修正、Tick 責任拆分與 enum 防護集中；聚焦 PlayMode 204／204、Editor／Reload 26／26 通過，CPU 取捨見 §5.23。
 - [x] 完成專案審查七項修正（BGM 轉場取消、換場快取、裝置變更、例外記錄、重複 Controller、API 一致性、§2.2 格式與欄位名稱）；PlayMode 395／395、EditMode 28／28 通過，破壞性變更見 Migration.md 與 §5.24。
+- [x] 完成 enum 順序耦合集中、失敗 handle 工廠與具體原因、冗長條件具名化、語法整理及旗標參數拆分；PlayMode 402／402、EditMode 29／29 通過，見 §5.25。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1471,3 +1490,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.27 | 2026-10-05 | 合併停止分支、以一次暫停需求判斷控制狀態切換、固定映射改用 switch；七組聚焦 PlayMode 154／154 通過，保持 API／序列化及既有生命週期契約，見 §5.22 |
 | 1.28 | 2026-10-05 | 修正 Debug Menu 過時設定來源、拆出 Tick 淡變／轉場責任、集中既有 enum 防護；聚焦 PlayMode 204／204、Editor／Reload 26／26 通過，記錄零管理配置測點與部分 CPU 增加，見 §5.23 |
 | 1.29 | 2026-10-14 | 依專案審查修正七項：BGM 轉場取消不跳音、Single 換場自動釋放普通快取、裝置變更保留並重播循環、記錄 Provider 例外、提示設定不同的重複 Controller、`PlayIndependent`／`StopAll` 並移除 Preload 與 stopAfter、欄位改名與一行一個狀態變更；PlayMode 395／395、EditMode 28／28 通過，見 §5.24 |
+| 1.30 | 2026-10-14 | 集中通道／分類對應與分類遮罩、合併引擎分類狀態；統一失敗 handle 並拆出具體原因；冗長條件改具名判斷、語法整理、拆除暫停與來源刷新的旗標參數；PlayMode 402／402、EditMode 29／29 通過，見 §5.25 |

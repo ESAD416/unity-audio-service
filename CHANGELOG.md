@@ -1,5 +1,12 @@
 # 變更紀錄
 
+## Unreleased - enum 順序耦合、失敗原因與條件判斷整理（2026-10-14）
+
+- 通道與分類的對應、分類遮罩及通道清單集中到 `AudioMixerLayout`（新增內部 `CategoryMask`），移除 10 多處依賴 enum 順序的魔術數字；引擎的分類增益、淡變與靜音合成單一 `Bus` 狀態，Editor 改用同一份通道清單，並以 EditMode 測試鎖住 enum 順序。
+- 失敗 handle 改由內部工廠建立。服務未就緒時，handle 的 `FailureReason` 與 Console 使用同一段含修正步驟的文字；引擎把合併的「Service unavailable or empty audio id/clip」拆成未就緒、無效分類、空 ID 且無 clip 三種原因，`PlaySfx((AudioClip)null)` 不再顯示服務不可用。失敗原因不再造成 Console 句尾重複句號。
+- 長條件抽成具名判斷（自然播完、BGM 先淡出、Store 持有、Addressables 可用與世代）；改用 `float.IsFinite`、switch expression 與區域函式；`ValidateMixer` 回報第一個問題。引擎的暫停與來源刷新拆掉布林旗標參數。公開 API、Prefab 與序列化欄位不變。
+- 本機 PlayMode 402／402、EditMode 29／29 通過，新增 8 項回歸，既有測試未修改；本輪未重跑 macOS Player 與量測。詳見改善計畫 §5.25。
+
 ## Unreleased - 專案審查七項修正（2026-10-14）
 
 - 取消等待中的 BGM 轉場時，目前音樂從當下包絡以原淡出速度回到 1，不再瞬間跳回全音量；之後的停止或替換從當下音量開始，目前音樂自己的 Stop 淡出也不再被清除。
