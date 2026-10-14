@@ -22,8 +22,12 @@ namespace Controller.Audio.Editor
     /// <summary>On-demand, read-only Editor checks. Does not load clips, repair settings, or test audible output.</summary>
     public static class AudioSetupDiagnostics
     {
-        private static readonly string[] ChannelNames = { "Master", "BGM", "SFX", "Voice" };
-        private static readonly string[] ChannelValues = { "Master", "Bgm", "Sfx", "Voice" };
+        private static string DisplayName(AudioChannel channel) => channel switch
+        {
+            AudioChannel.Bgm => "BGM",
+            AudioChannel.Sfx => "SFX",
+            _ => channel.ToString()
+        };
 
         public static IReadOnlyList<AudioSetupIssue> GetIssues(AudioController controller)
         {
@@ -78,15 +82,15 @@ namespace Controller.Audio.Editor
                 issues.Add(new AudioSetupIssue("Game audio is paused. Resume with AudioService.SetGamePaused(false); IgnoreGamePause sounds can still play.", MessageType.Info));
             if (state.BackgroundPaused)
                 issues.Add(new AudioSetupIssue("Background audio is paused. Return to the app, or review the owner of SetBackgroundPaused and Pause On Background.", MessageType.Info));
-            for (int i = 0; i < ChannelNames.Length; i++)
+            foreach (var channel in AudioMixerLayout.Channels)
             {
-                var channel = controller.GetChannelDiagnostics((AudioChannel)i);
-                string name = ChannelNames[i], argument = "AudioChannel." + ChannelValues[i];
-                if (channel.Muted)
+                var controls = controller.GetChannelDiagnostics(channel);
+                string name = DisplayName(channel), argument = "AudioChannel." + channel;
+                if (controls.Muted)
                     issues.Add(new AudioSetupIssue($"{name} is muted. To unmute, call AudioService.SetMuted({argument}, false).", MessageType.Info, controller));
-                if (channel.Volume <= 0)
-                    issues.Add(new AudioSetupIssue($"{name} player volume is 0. Raise it through your volume UI or AudioService.Set{ChannelValues[i]}Volume(value).", MessageType.Info, controller));
-                if (channel.FadeGain <= 0)
+                if (controls.Volume <= 0)
+                    issues.Add(new AudioSetupIssue($"{name} player volume is 0. Raise it through your volume UI or AudioService.Set{channel}Volume(value).", MessageType.Info, controller));
+                if (controls.FadeGain <= 0)
                     issues.Add(new AudioSetupIssue($"{name} FadeBus gain is 0. To restore it, call AudioService.FadeBus({argument}, 1f, seconds). This does not change saved volume.", MessageType.Info, controller));
             }
             return issues;

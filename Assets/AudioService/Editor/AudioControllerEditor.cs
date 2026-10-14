@@ -69,9 +69,8 @@ namespace Controller.Audio.Editor
                 EditorGUILayout.HelpBox("Last recorded failure (may be historical): " + state.LastFailure, MessageType.Warning);
             channelControls = EditorGUILayout.Foldout(channelControls, "Channel controls (read only)", true);
             if (channelControls && controller.Ready)
-                for (int i = 0; i < 4; i++)
+                foreach (var channel in AudioMixerLayout.Channels)
                 {
-                    var channel = (AudioChannel)i;
                     var output = controller.GetChannelDiagnostics(channel);
                     EditorGUILayout.LabelField(channel.ToString(), $"Volume {output.Volume:P0} / Fade {output.FadeGain:P0} / {(output.Muted ? "Muted" : "Unmuted")}");
                 }

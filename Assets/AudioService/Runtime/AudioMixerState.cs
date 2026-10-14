@@ -6,16 +6,10 @@ namespace Controller.Audio
 {
     internal sealed class AudioMixerState
     {
-        private readonly float[] volumes =
-        {
-            1,
-            1,
-            1,
-            1
-        };
+        private readonly float[] volumes = new float[AudioMixerLayout.ChannelCount];
         private readonly bool[] parameters = new bool[AudioMixerLayout.ChannelCount];
         private readonly AudioMixerGroup[] groups = new AudioMixerGroup[AudioMixerLayout.CategoryCount];
-        private readonly Action<int> refreshGains;
+        private readonly Action<CategoryMask> refreshGains;
         private readonly Action<AudioChannel, float> volumeChanged;
         private AudioMixer mixer;
         private IAudioSettingsHandler settings;
@@ -23,8 +17,9 @@ namespace Controller.Audio
         public bool Applied { get; private set; }
         public string LastIssue { get; private set; }
 
-        public AudioMixerState(Action<int> refreshGains, Action<AudioChannel, float> volumeChanged)
+        public AudioMixerState(Action<CategoryMask> refreshGains, Action<AudioChannel, float> volumeChanged)
         {
+            Array.Fill(volumes, 1f);
             this.refreshGains = refreshGains;
             this.volumeChanged = volumeChanged;
         }
@@ -102,15 +97,16 @@ namespace Controller.Audio
                     volumes[index] = value;
                     if (Applied)
                         ApplyParameter(index);
-                    int categories = 0;
+                    // A mixer-applied volume leaves source gains unchanged; refresh only moved categories.
+                    var moved = CategoryMask.None;
                     if (bgm != SourceGain(AudioCategory.Bgm))
-                        categories |= 1;
+                        moved |= CategoryMask.Bgm;
                     if (sfx != SourceGain(AudioCategory.Sfx))
-                        categories |= 2;
+                        moved |= CategoryMask.Sfx;
                     if (voice != SourceGain(AudioCategory.Voice))
-                        categories |= 4;
-                    if (categories != 0)
-                        refreshGains(categories);
+                        moved |= CategoryMask.Voice;
+                    if (moved != CategoryMask.None)
+                        refreshGains(moved);
                 }
 
                 // Persist even an unchanged value after a temporary, nonpersistent override.
@@ -131,7 +127,7 @@ namespace Controller.Audio
             Applied = true;
             for (int i = 0; i < parameters.Length; i++)
                 ApplyParameter(i);
-            refreshGains(7);
+            refreshGains(CategoryMask.All);
         }
 
         public bool Validate()
@@ -157,9 +153,10 @@ namespace Controller.Audio
 
         public float SourceGain(AudioCategory category)
         {
-            int channel = (int)category + 1;
             bool routed = mixer != null && groups[(int)category] != null;
-            return (routed && parameters[0] ? 1 : volumes[0]) * (routed && parameters[channel] ? 1 : volumes[channel]);
+            // A routed source leaves each volume the mixer already applies through its exposed parameter.
+            float Volume(AudioChannel channel) => routed && parameters[(int)channel] ? 1 : volumes[(int)channel];
+            return Volume(AudioChannel.Master) * Volume(AudioMixerLayout.ChannelOf(category));
         }
     }
 }

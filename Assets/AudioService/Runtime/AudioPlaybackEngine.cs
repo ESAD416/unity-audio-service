@@ -66,6 +66,14 @@ namespace Controller.Audio
             public Playback Current, Pending;
         }
 
+        // Temporary per-channel controls; saved player volume lives in AudioMixerState.
+        private struct Bus
+        {
+            public float Gain;
+            public Tween Fade;
+            public bool Muted;
+        }
+
         private readonly AudioPreparationQueue preparations;
         private readonly AudioCallbackQueue callbacks = new();
         internal void NotifyCompleted(Action callback) => callbacks.Enqueue(callback);
@@ -86,15 +94,7 @@ namespace Controller.Audio
             PlaybackSlot.Dialogue => dialogue,
             _ => null
         };
-        private readonly float[] busGains =
-        {
-            1,
-            1,
-            1,
-            1
-        };
-        private readonly Tween[] busTweens = new Tween[4];
-        private readonly bool[] muted = new bool[4];
+        private readonly Bus[] buses = new Bus[AudioMixerLayout.ChannelCount];
         private long nextId;
         private bool disposed, gamePaused, backgroundPaused, listenerPaused;
         private AudioClipStore store;
@@ -123,6 +123,7 @@ namespace Controller.Audio
         public AudioPlaybackEngine(AudioController host, IAudioClipProvider provider)
         {
             this.host = host;
+            Array.Fill(buses, new Bus { Gain = 1 });
             listenerPaused = AudioListener.pause;
             preparations = new AudioPreparationQueue(callbacks);
             SetProvider(provider);
@@ -693,13 +694,19 @@ namespace Controller.Audio
 
         public void SetMuted(AudioChannel channel, bool value)
         {
-            if (muted[(int)channel] == value)
+            ref var bus = ref buses[(int)channel];
+            if (bus.Muted == value)
                 return;
-            muted[(int)channel] = value;
-            RefreshGains(ChannelMask(channel));
+            bus.Muted = value;
+            RefreshGains(AudioMixerLayout.MaskOf(channel));
         }
 
-        public AudioChannelDiagnostics GetChannelDiagnostics(AudioChannel channel, float volume) => new AudioChannelDiagnostics(volume, busGains[(int)channel], muted[(int)channel]);
+        public AudioChannelDiagnostics GetChannelDiagnostics(AudioChannel channel, float volume)
+        {
+            ref readonly var bus = ref buses[(int)channel];
+            return new AudioChannelDiagnostics(volume, bus.Gain, bus.Muted);
+        }
+
         /// <summary>Stop one category, or every category when null.</summary>
         public void StopCategory(AudioCategory? category, float seconds)
         {
@@ -725,32 +732,33 @@ namespace Controller.Audio
 
         public void FadeBus(AudioChannel channel, float target, float seconds)
         {
-            var index = (int)channel;
+            ref var bus = ref buses[(int)channel];
             if (seconds <= 0)
             {
-                busTweens[index] = default;
-                busGains[index] = target;
+                bus.Fade = default;
+                bus.Gain = target;
             }
             else
-                busTweens[index] = new Tween
+                bus.Fade = new Tween
                 {
-                    Start = busGains[index],
+                    Start = bus.Gain,
                     Target = target,
                     Duration = seconds
                 };
-            RefreshGains(ChannelMask(channel));
+            RefreshGains(AudioMixerLayout.MaskOf(channel));
         }
 
-        private static int ChannelMask(AudioChannel channel) => channel == AudioChannel.Master ? 7 : 1 << ((int)channel - 1);
-        private static bool NeedsGain(Emitter emitter, int categories) => emitter.Current != null && (categories & (1 << (int)emitter.Current.Handle.Category)) != 0;
+        private static bool NeedsGain(Emitter emitter, CategoryMask categories)
+            => emitter.Current != null && (categories & AudioMixerLayout.MaskOf(emitter.Current.Handle.Category)) != 0;
         private void ApplyGain(Emitter emitter)
         {
             if (emitter.Source == null || emitter.Current == null)
                 return;
             var p = emitter.Current;
             var category = p.Handle.Category;
-            int bus = (int)category + 1;
-            float gain = busGains[0] * busGains[bus] * (muted[0] || muted[bus] ? 0 : 1);
+            ref readonly var master = ref buses[(int)AudioChannel.Master];
+            ref readonly var bus = ref buses[(int)AudioMixerLayout.ChannelOf(category)];
+            float gain = master.Muted || bus.Muted ? 0 : master.Gain * bus.Gain;
             gain *= p.Options.Volume * emitter.Envelope * host.SourceSettingsGain(category);
             gain = AudioValues.Unit(gain);
             if (emitter.AppliedGain == gain)
@@ -768,25 +776,25 @@ namespace Controller.Audio
             }
         }
 
-        public void RefreshGains(int categories = 7)
+        public void RefreshGains(CategoryMask categories = CategoryMask.All)
         {
             foreach (var emitter in updating)
                 if (NeedsGain(emitter, categories))
                     ApplyGain(emitter);
         }
 
-        private int AdvanceBusTweens(float delta)
+        private CategoryMask AdvanceBusFades(float delta)
         {
-            int changedCategories = 0;
-            for (int i = 0; i < busTweens.Length; i++)
+            var changedCategories = CategoryMask.None;
+            for (int i = 0; i < buses.Length; i++)
             {
-                ref var tween = ref busTweens[i];
-                if (!tween.Active)
+                ref var bus = ref buses[i];
+                if (!bus.Fade.Active)
                     continue;
-                changedCategories |= ChannelMask((AudioChannel)i);
-                busGains[i] = tween.Advance(delta);
-                if (tween.Done)
-                    tween = default;
+                changedCategories |= AudioMixerLayout.MaskOf(AudioMixerLayout.Channels[i]);
+                bus.Gain = bus.Fade.Advance(delta);
+                if (bus.Fade.Done)
+                    bus.Fade = default;
             }
 
             return changedCategories;
@@ -826,8 +834,8 @@ namespace Controller.Audio
                 return;
             SyncListenerPause();
             preparations.Tick();
-            int changedCategories = AdvanceBusTweens(delta);
-            bool gainsChanged = changedCategories != 0;
+            var changedCategories = AdvanceBusFades(delta);
+            bool gainsChanged = changedCategories != CategoryMask.None;
             int iSource = 0;
             while (iSource < updating.Count)
             {
@@ -887,7 +895,8 @@ namespace Controller.Audio
             // Reset invalidates old preparations and resident data assumptions.
             // Kept loops still own their leases from the previous store.
             SetProvider(provider, true);
-            Array.Clear(busTweens, 0, busTweens.Length);
+            for (int i = 0; i < buses.Length; i++)
+                buses[i].Fade = default;
             foreach (var emitter in emitters)
                 emitter.AppliedGain = float.NaN;
             RefreshRouting();
