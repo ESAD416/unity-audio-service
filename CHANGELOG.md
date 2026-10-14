@@ -1,5 +1,11 @@
 # 變更紀錄
 
+## Unreleased - Tween 具名工廠、停止規則與小型語法整理（2026-10-15）
+
+- 引擎 5 處 Tween 物件初始化改用 `Tween.Fade`／`Tween.FadeOut` 具名工廠，「轉場是否屬於某個播放」改用 `Tween.Is`。新增 `StopResult`，讓淘汰、Shutdown 與單次停止共用「尚未開始就停止即為取消」的規則，`StopPlayback` 簡化為兩個分支。
+- `ExternalId` 改用內建 `StrongBox<AudioId>`；Store 計數改為回傳 tuple；準備佇列的長 lambda 抽成 `Receive`，失敗記錄的查找提示抽成 `LookupHint`；Fallback 合併循環檢查、主／備走訪與同步取得的兩條放棄路徑。
+- 公開 API、Prefab、序列化欄位、行為與診斷文字不變。本機 PlayMode 402／402、EditMode 29／29 通過，配置事件與上一輪相同；本輪未重跑 macOS Player。詳見改善計畫 §5.28。
+
 ## Unreleased - 守衛一致性、殘留 enum 順序與設定綁定整理（2026-10-14）
 
 - `AudioSettingsPlayerPrefs` 改用 `AudioChannel` 與共用通道清單，移除 `new float[4]`、`(AudioChannel)i` 與以 0～3 整數索引的 key／預設值；正式程式只剩 `AudioMixerLayout` 依賴 enum 順序。

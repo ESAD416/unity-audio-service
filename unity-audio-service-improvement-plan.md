@@ -1,10 +1,10 @@
 # Unity Audio Service 改善與成熟化計劃
 
-文件日期：2026-10-14
+文件日期：2026-10-15
 
-文件版本：1.32
+文件版本：1.33
 
-狀態：完成守衛一致性、殘留 enum 順序與設定綁定整理，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.27）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成 Tween 具名工廠、停止規則與小型語法整理，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.28）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1274,6 +1274,23 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；既有測試未修改，也未新增測試。本機量測的 20 組配置事件中位數與 §5.26 相同。XML／log 位於 `work/stage-two-hardening/guards-{run1,editor-run1}-20261014.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
 
+### 5.28 Tween 具名工廠、停止規則與小型語法整理
+
+記錄日期：2026-10-15。依使用者指定，完成第三次程式碼檢視中「讓意圖更清楚的語法」的四項（第 5～8 項），從 `e6729d7` 開始修改，未提交。公開 API、Prefab、序列化欄位、行為與診斷文字不變。
+
+| 項目 | 處理 |
+| --- | --- |
+| 5 Tween | 5 處 6～8 行的物件初始化改為 `Tween.Fade(from, to, seconds)` 與 `Tween.FadeOut(from, seconds, then, playback)`；2 處「完成動作種類加上 `ReferenceEquals`」的判斷改為 `transition.Is(completion, playback)` |
+| 6 停止規則 | 新增 `StopResult`（尚未開始的請求被停止即為取消），用於淘汰、Shutdown 與 `StopPlayback`。`StopPlayback` 改為兩個分支：只有播放中且有淡出時間才淡出，其餘立即結束 |
+| 7 內建型別 | 外部 clip ID 的私有包裝類別 `ExternalId` 改用內建 `StrongBox<AudioId>`；Store 的 `GetCounts(out, out, out)` 改為回傳 tuple 的 `Counts()`；三行的空 lambda 寫成一行 |
+| 8 長 lambda 與重複 | `AudioPreparationQueue.Prepare` 的 30 行 lambda 抽成 `Receive` 與 `RequestAudioData`；`AudioFailureLog` 的多層三元提示抽成 `LookupHint`，輸出文字不變；Fallback 的循環檢查合為 `FormsCycle`，三處「主來源加上不同備援」改用 `DistinctSecondary`，同步取得的兩條放棄路徑合併為一個條件 |
+
+**易用性檢查：** 使用流程、公開 API 與診斷文字都不變，屬純內部整理。
+
+**維護性檢查：** 引擎建立轉場的程式從約 35 行降為 5 個具名呼叫，停止規則只剩一處；移除一個私有包裝類別與三個 out 參數。`Receive` 保留原本把 `Check` 包在例外處理內的範圍。暫不處理：`AdvanceTransition` 的 `Stop when ReferenceEquals(emitter.Current, target)` 比較的是聲源目前的播放，而不是轉場本身，語意不同，未改用 `Is`。
+
+**驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤。本機測試只把兩處 `GetCounts` 呼叫配合改為 `Counts()`，未新增測試。本機量測的 20 組配置事件中位數與 §5.27 相同。XML／log 位於 `work/stage-two-hardening/syntax-{run1,editor-run1}-20261015.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1478,6 +1495,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成 enum 順序耦合集中、失敗 handle 工廠與具體原因、冗長條件具名化、語法整理及旗標參數拆分；PlayMode 402／402、EditMode 29／29 通過，見 §5.25。
 - [x] 完成 ClipHold 素材持有、Finish／Store.Request 拆分及 AudioSourcePool／AudioAdmission 抽出；PlayMode 402／402、EditMode 29／29 通過，見 §5.26。
 - [x] 完成 PlayerPrefs 通道索引、設定綁定旗標、Controller 守衛統一與 Resources key 解析整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.27。
+- [x] 完成 Tween 具名工廠、StopResult、內建型別與 tuple、長 lambda 與 Fallback 重複整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.28。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1528,3 +1546,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.30 | 2026-10-14 | 集中通道／分類對應與分類遮罩、合併引擎分類狀態；統一失敗 handle 並拆出具體原因；冗長條件改具名判斷、語法整理、拆除暫停與來源刷新的旗標參數；PlayMode 402／402、EditMode 29／29 通過，見 §5.25 |
 | 1.31 | 2026-10-14 | 合併 Playback 的兩種素材持有為 ClipHold；拆分 Finish 與 AudioClipStore.Request；從引擎抽出聲源池與並發接納；PlayMode 402／402、EditMode 29／29 通過，配置事件與修改前相同，見 §5.26 |
 | 1.32 | 2026-10-14 | 移除最後一處 enum 順序耦合；拆掉設定綁定的旗標參數；Controller 命令統一經過 ReadyEngine 並合併 Mixer 套用；Resources key 解析共用；PlayMode 402／402、EditMode 29／29 通過，見 §5.27 |
+| 1.33 | 2026-10-15 | Tween 改用具名工廠與 Is；統一停止結果規則；改用 StrongBox 與 tuple；抽出準備佇列與失敗提示的長邏輯並合併 Fallback 重複；PlayMode 402／402、EditMode 29／29 通過，見 §5.28 |
