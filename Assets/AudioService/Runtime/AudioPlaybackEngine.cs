@@ -129,11 +129,18 @@ namespace Controller.Audio
             SetProvider(provider);
         }
 
-        public void SetProvider(IAudioClipProvider next, bool force = false, bool refreshLookup = false)
+        /// <summary>Use another provider. The same provider keeps the current store.</summary>
+        public void SetProvider(IAudioClipProvider next)
+        {
+            if (!ReferenceEquals(provider, next) || store == null)
+                ResetStore(next);
+        }
+
+        /// <summary>Start a new store generation, cancelling pending loads and preparations.
+        /// Playing sounds keep their leases from the previous store.</summary>
+        public void ResetStore(IAudioClipProvider next)
         {
             using var mutation = callbacks.Begin();
-            if (!force && ReferenceEquals(provider, next) && store != null)
-                return;
             if (disposed)
                 return;
             // Publish the new generation before cancellation callbacks can request work.
@@ -146,7 +153,14 @@ namespace Controller.Audio
                     Finish(playback, AudioCompletion.Cancelled);
             preparations.CancelAll();
             previousStore?.Dispose();
-            if (refreshLookup && AudioValues.Alive(next) && next is IAudioClipProviderRefresh refreshable)
+        }
+
+        /// <summary>Reset the store, then let the provider publish fresh lookups within the same mutation.</summary>
+        public void RefreshLookup(IAudioClipProvider next)
+        {
+            using var mutation = callbacks.Begin();
+            ResetStore(next);
+            if (!disposed && AudioValues.Alive(next) && next is IAudioClipProviderRefresh refreshable)
                 AudioCallbacks.Invoke(refreshable.RefreshClipLookup);
         }
 
@@ -696,14 +710,14 @@ namespace Controller.Audio
             p.Handle.State = shouldPause ? AudioPlaybackState.Paused : AudioPlaybackState.Playing;
         }
 
-        public void SetPaused(bool paused, bool background = false)
+        public void SetGamePaused(bool paused) => SetPauseFlag(ref gamePaused, paused);
+        public void SetBackgroundPaused(bool paused) => SetPauseFlag(ref backgroundPaused, paused);
+
+        private void SetPauseFlag(ref bool flag, bool paused)
         {
-            if ((background ? backgroundPaused : gamePaused) == paused)
+            if (flag == paused)
                 return;
-            if (background)
-                backgroundPaused = paused;
-            else
-                gamePaused = paused;
+            flag = paused;
             // ApplyPause only updates native sources and handle state; no external callbacks.
             foreach (var p in active)
                 ApplyPause(p);
@@ -919,7 +933,7 @@ namespace Controller.Audio
 
             // Reset invalidates old preparations and resident data assumptions.
             // Kept loops still own their leases from the previous store.
-            SetProvider(provider, true);
+            ResetStore(provider);
             for (int i = 0; i < buses.Length; i++)
                 buses[i].Fade = default;
             foreach (var emitter in emitters)

@@ -180,7 +180,7 @@ namespace Controller.Audio
         private void OnApplicationPause(bool paused)
         {
             if (pauseOnBackground)
-                engine?.SetPaused(paused, true);
+                engine?.SetBackgroundPaused(paused);
         }
 
         private void Update()
@@ -253,15 +253,25 @@ namespace Controller.Audio
             AttachProviderNotifications();
         }
 
-        public void RefreshClipProvider() => RefreshClipState(true);
-        private void RefreshCatalog() => RefreshClipState(false);
+        public void RefreshClipProvider()
+        {
+            BeginClipStateRefresh();
+            if (Ready)
+                engine?.RefreshLookup(ClipProvider);
+        }
 
-        private void RefreshClipState(bool refreshLookup)
+        private void RefreshCatalog()
+        {
+            BeginClipStateRefresh();
+            if (Ready)
+                engine?.ResetStore(ClipProvider);
+        }
+
+        // New lookups and mappings start with fresh warnings and the current catalog binding.
+        private void BeginClipStateRefresh()
         {
             failureLog = null;
             BindCatalog();
-            if (Ready)
-                engine?.SetProvider(ClipProvider, force: true, refreshLookup: refreshLookup);
         }
 
         private void BindCatalog()
@@ -345,8 +355,8 @@ namespace Controller.Audio
                 engine.FadeBus(channel, AudioValues.Unit(targetVolume), AudioValues.Seconds(seconds));
         }
 
-        public void SetGamePaused(bool paused) => engine?.SetPaused(paused);
-        public void SetBackgroundPaused(bool paused) => engine?.SetPaused(paused, true);
+        public void SetGamePaused(bool paused) => engine?.SetGamePaused(paused);
+        public void SetBackgroundPaused(bool paused) => engine?.SetBackgroundPaused(paused);
         public void SetMuted(AudioChannel channel, bool muted)
         {
             if (AudioValues.IsValidChannel(channel))
