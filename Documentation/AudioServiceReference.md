@@ -8,7 +8,9 @@
 | --- | --- |
 | `AudioService` | 推薦播放與分類控制入口 |
 | `AudioController` | 唯一宿主；序列化依賴、啟停與 Unity 通知 |
-| `AudioPlaybackEngine` | handle、並發、替換槽、動態聲源池、暫停與淡變 |
+| `AudioPlaybackEngine` | handle、替換槽、播放的素材持有、暫停與淡變 |
+| `AudioAdmission` | 全域與單音效並發上限及按需計數索引；先判斷全部限制，再依單音效優先、全域最舊的順序選出淘汰對象 |
+| `AudioSourcePool` | 原生 AudioSource 的建立、閒置重用、每幀更新清單、預熱與縮池 |
 | `AudioClipStore` | 等待者、播放使用者、普通快取與預載群組的持有責任 |
 | `AudioPreparationQueue` | 等待音訊資料 Loaded、一次完成與群組取消；與引擎共用回呼佇列 |
 | `IAudioClipProvider` | 底層素材查詢、取得與 lease 釋放 |

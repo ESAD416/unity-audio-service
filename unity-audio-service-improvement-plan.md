@@ -2,9 +2,9 @@
 
 文件日期：2026-10-14
 
-文件版本：1.30
+文件版本：1.31
 
-狀態：完成 enum 順序耦合、失敗原因與條件判斷整理，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.25）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成素材持有、長方法與引擎責任拆分，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.26）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1241,6 +1241,22 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機修改前為上一輪最終狀態 PlayMode 395／395、EditMode 28／28；修改後完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤。新增 `TechDebtCleanupTests` 7 項（空 clip、無效分類、未就緒 handle 原因、缺少 Controller 與無效語音模式的單一句號、語音模式槽位、Mixer 第一個問題）與 EditMode `AudioMixerLayoutTests` 1 項，既有測試未修改。XML／log 位於 `work/stage-two-hardening/tech-debt-{run1,editor-run1}-20261014.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與量測；人工聽感、其他平台與 IL2CPP 的驗收界線不變。
 
+### 5.26 素材持有、長方法與引擎責任拆分
+
+記錄日期：2026-10-14。依使用者指定，完成程式碼檢視中「結構性：可以做，但要另外排時間」的三項，接續 §5.25 的未提交差異。公開 API、Prefab、序列化欄位與行為不變。
+
+| 項目 | 處理 |
+| --- | --- |
+| 6 素材持有 | Playback 的 `Clip`／`Lease`／`ResidentUsage` 合成 `ClipHold` 值型別，提供外部 clip、非同步 lease、駐留 usage 三種來源與單一 `Release`。原本 `Loaded` 的兩個提前結束分支與 `Finish` 各自成對釋放兩種持有，現在都只呼叫一次 `Release`；`Loaded` 參數由 5 個減為 3 個。`ClipHold` 與原本三個欄位同為 4 個參考的大小，Playback 物件大小不變 |
+| 7 長方法 | `Finish` 拆出 `LeaveSlot`、`LeaveEmitter`、`RestoreCancelledFade` 與共用的 `RecordFailure`，主流程只剩提交狀態、通知與釋放的順序（72 → 22 行）。`AudioClipStore.Request` 拆出 `TryGetEntry`、`Retain`、`StartLoad`（68 → 27 行）；`TryAcquireResident` 也改用 `Retain`。`AcquireAsync` 維持獨立方法，避免同步路徑提前建立閉包 |
+| 8 引擎責任 | 抽出 `AudioSourcePool`：原生 AudioSource 的建立、閒置重用、每幀更新清單與換位移除、預熱、縮池及重設後的增益快取失效。抽出 `AudioAdmission`：全域與單音效上限、按需計數索引及淘汰順序，回傳拒絕原因後由引擎統一 Reject。`active` 清單仍歸引擎所有，兩者只讀取或由引擎通知增減。引擎由 960 行降為 858 行 |
+
+**易用性檢查：** 使用流程、公開 API 與診斷文字都不變，屬純內部重構。
+
+**維護性檢查：** 三處成對釋放收斂為一個持有值；兩個六七十行的方法拆成具名步驟；引擎不再同時管理原生聲源池與並發計數。`Emitter` 仍是引擎的巢狀型別，池使用其 `InPool`／`UpdateIndex` 與重設欄位；完全分離原生狀態與播放狀態需要拆開 `Emitter`，收益不足以抵銷改動量，暫不處理。引擎仍包含替換槽、淡變、分類增益與重設流程，下一個可評估的邊界是轉場／淡變。
+
+**驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤，既有測試未修改。現有測試已涵蓋聲源池重用與縮池、並發拒絕與淘汰順序、駐留／非同步持有及回呼重入。本機量測輸出的 20 組配置事件中位數與 §5.24 修改前基準完全相同（`perf-review-fixes-baseline-20261014.csv` 與 `perf-structure-run1-20261014.csv`），只代表配置事件次數，不代表 bytes 或 CPU。新增 `AudioAdmission.cs`、`AudioSourcePool.cs` 及 Unity 產生的 `.meta`。XML／log 位於 `work/stage-two-hardening/structure-{run1,editor-run1}-20261014.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1443,6 +1459,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成 Debug Menu 設定來源修正、Tick 責任拆分與 enum 防護集中；聚焦 PlayMode 204／204、Editor／Reload 26／26 通過，CPU 取捨見 §5.23。
 - [x] 完成專案審查七項修正（BGM 轉場取消、換場快取、裝置變更、例外記錄、重複 Controller、API 一致性、§2.2 格式與欄位名稱）；PlayMode 395／395、EditMode 28／28 通過，破壞性變更見 Migration.md 與 §5.24。
 - [x] 完成 enum 順序耦合集中、失敗 handle 工廠與具體原因、冗長條件具名化、語法整理及旗標參數拆分；PlayMode 402／402、EditMode 29／29 通過，見 §5.25。
+- [x] 完成 ClipHold 素材持有、Finish／Store.Request 拆分及 AudioSourcePool／AudioAdmission 抽出；PlayMode 402／402、EditMode 29／29 通過，見 §5.26。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1491,3 +1508,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.28 | 2026-10-05 | 修正 Debug Menu 過時設定來源、拆出 Tick 淡變／轉場責任、集中既有 enum 防護；聚焦 PlayMode 204／204、Editor／Reload 26／26 通過，記錄零管理配置測點與部分 CPU 增加，見 §5.23 |
 | 1.29 | 2026-10-14 | 依專案審查修正七項：BGM 轉場取消不跳音、Single 換場自動釋放普通快取、裝置變更保留並重播循環、記錄 Provider 例外、提示設定不同的重複 Controller、`PlayIndependent`／`StopAll` 並移除 Preload 與 stopAfter、欄位改名與一行一個狀態變更；PlayMode 395／395、EditMode 28／28 通過，見 §5.24 |
 | 1.30 | 2026-10-14 | 集中通道／分類對應與分類遮罩、合併引擎分類狀態；統一失敗 handle 並拆出具體原因；冗長條件改具名判斷、語法整理、拆除暫停與來源刷新的旗標參數；PlayMode 402／402、EditMode 29／29 通過，見 §5.25 |
+| 1.31 | 2026-10-14 | 合併 Playback 的兩種素材持有為 ClipHold；拆分 Finish 與 AudioClipStore.Request；從引擎抽出聲源池與並發接納；PlayMode 402／402、EditMode 29／29 通過，配置事件與修改前相同，見 §5.26 |

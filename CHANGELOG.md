@@ -1,5 +1,12 @@
 # 變更紀錄
 
+## Unreleased - 素材持有、長方法與引擎責任拆分（2026-10-14）
+
+- Playback 原本以互斥的 `Lease`／`ResidentUsage` 兩個欄位持有素材，每個結束路徑都要成對釋放；改為單一 `ClipHold` 值型別，`Loaded` 參數由 5 個減為 3 個，駐留快取路徑仍不配置。
+- `Finish` 拆成離開替換槽、離開聲源與還原被取消的淡出（72 → 22 行）；`AudioClipStore.Request` 拆成取得或建立 entry、保留與開始載入（68 → 27 行），保留同步請求不加入非同步載入、失敗 entry 由新請求取代等規則。
+- 從 `AudioPlaybackEngine` 抽出 `AudioSourcePool`（建立、閒置重用、更新清單、預熱與縮池）與 `AudioAdmission`（並發上限與按需計數索引），引擎由 960 行降為 858 行。公開 API、Prefab、序列化欄位與行為不變。
+- 本機 PlayMode 402／402、EditMode 29／29 通過，既有測試未修改；本機量測的 20 組配置事件數與修改前相同。本輪未重跑 macOS Player；詳見改善計畫 §5.26。
+
 ## Unreleased - enum 順序耦合、失敗原因與條件判斷整理（2026-10-14）
 
 - 通道與分類的對應、分類遮罩及通道清單集中到 `AudioMixerLayout`（新增內部 `CategoryMask`），移除 10 多處依賴 enum 順序的魔術數字；引擎的分類增益、淡變與靜音合成單一 `Bus` 狀態，Editor 改用同一份通道清單，並以 EditMode 測試鎖住 enum 順序。
