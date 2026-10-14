@@ -48,13 +48,34 @@ namespace Controller.Audio
             public Playback Current, Pending;
         }
 
+        // What keeps a playback's clip valid: a lease from an asynchronous store delivery,
+        // a resident store usage (no allocation), or nothing for an externally owned clip.
+        internal struct ClipHold
+        {
+            private AudioClipLease lease;
+            private AudioClipStore.Usage usage;
+            public AudioClip Clip { get; private set; }
+
+            public static ClipHold External(AudioClip clip) => new ClipHold { Clip = clip };
+            public static ClipHold Of(AudioClipLease lease) => new ClipHold { lease = lease, Clip = lease?.Clip };
+            public static ClipHold Of(AudioClipStore.Usage usage) => new ClipHold { usage = usage, Clip = usage.Clip };
+
+            // A playback keeps its hold in exactly one field; clear that field before releasing.
+            public void Release()
+            {
+                var heldUsage = usage;
+                var heldLease = lease;
+                this = default;
+                heldUsage.Dispose();
+                AudioCallbacks.Dispose(heldLease);
+            }
+        }
+
         internal sealed class Playback
         {
             public AudioHandle Handle;
             public PlaybackOptions Options;
-            public AudioClip Clip;
-            public AudioClipLease Lease;
-            public AudioClipStore.Usage ResidentUsage;
+            public ClipHold Hold;
             public Action CancelLoad;
             public Emitter Emitter;
             public PlaybackSlot Slot;
@@ -396,9 +417,9 @@ namespace Controller.Audio
             AddActive(playback);
             // Loading reserves admission, not a native AudioSource.
             if (direct != null)
-                Loaded(playback, direct);
+                Loaded(playback, ClipHold.External(direct));
             else if (store.TryAcquireResident(handle.Category, key, out var usage))
-                Loaded(playback, usage.Clip, usage: usage);
+                Loaded(playback, ClipHold.Of(usage));
             else
                 RequestClip(playback, address ?? new ResolvedAudioClip(key, handle.Category));
         }
@@ -406,8 +427,8 @@ namespace Controller.Audio
         private void RequestClip(Playback playback, ResolvedAudioClip address)
         {
             // Isolate the load closure from direct playback and rejected requests.
-            var cancel = store.Request(address, playback.Options.AllowAsyncLoad, lease => Loaded(playback, lease?.Clip, lease, address));
-            if (!playback.Handle.IsFinished && playback.Clip == null)
+            var cancel = store.Request(address, playback.Options.AllowAsyncLoad, lease => Loaded(playback, ClipHold.Of(lease), address));
+            if (!playback.Handle.IsFinished && playback.Hold.Clip == null)
                 playback.CancelLoad = cancel;
         }
 
@@ -482,31 +503,27 @@ namespace Controller.Audio
                 host.ReportPlaybackFailure(handle.Category, handle.AudioId, reason);
         }
 
-        private void Loaded(Playback playback, AudioClip clip, AudioClipLease lease = null, ResolvedAudioClip? address = null, AudioClipStore.Usage usage = default)
+        private void Loaded(Playback playback, ClipHold hold, ResolvedAudioClip? address = null)
         {
             using var mutation = callbacks.Begin();
             if (disposed || playback.Handle.IsFinished)
             {
-                usage.Dispose();
-                AudioCallbacks.Dispose(lease);
+                hold.Release();
                 return;
             }
 
             SyncListenerPause();
             playback.CancelLoad = null;
-            if (clip == null)
+            if (hold.Clip == null)
             {
-                usage.Dispose();
-                AudioCallbacks.Dispose(lease);
+                hold.Release();
                 string reason = "Clip load failed: " + playback.Handle.AudioId;
                 Finish(playback, AudioCompletion.Failed, reason);
                 host.ReportPlaybackFailure(playback.Handle.Category, playback.Handle.AudioId, reason, address, playback.Options.AllowAsyncLoad);
                 return;
             }
 
-            playback.Lease = lease;
-            playback.ResidentUsage = usage;
-            playback.Clip = clip;
+            playback.Hold = hold;
             var state = GetSlot(playback.Slot);
             playback.Emitter = state?.Current?.Emitter ?? Rent();
             playback.Emitter.Pending = playback;
@@ -553,7 +570,7 @@ namespace Controller.Audio
             emitter.Envelope = playback.Options.FadeInSeconds > 0 ? 0 : 1;
             var source = emitter.Source;
             host.ConfigureSource(source, playback.Handle.Category);
-            source.clip = playback.Clip;
+            source.clip = playback.Hold.Clip;
             source.loop = playback.Options.Loop;
             source.pitch = playback.Options.Pitch;
             source.ignoreListenerPause = playback.Options.IgnoreGamePause;
@@ -578,11 +595,8 @@ namespace Controller.Audio
             RemoveActive(playback);
             var cancel = playback.CancelLoad;
             playback.CancelLoad = null;
-            var lease = playback.Lease;
-            playback.Lease = null;
-            var usage = playback.ResidentUsage;
-            playback.ResidentUsage = default;
-            playback.Clip = null;
+            var hold = playback.Hold;
+            playback.Hold = default;
             var state = GetSlot(playback.Slot);
             if (state != null)
             {
@@ -638,8 +652,7 @@ namespace Controller.Audio
             // Store leases update internal counts now. Actual provider releases
             // are queued by the store until this entire engine mutation commits.
             AudioCallbacks.Invoke(cancel);
-            usage.Dispose();
-            AudioCallbacks.Dispose(lease);
+            hold.Release();
             if (resumePending && pending != null && !disposed)
                 Start(pending);
         }
