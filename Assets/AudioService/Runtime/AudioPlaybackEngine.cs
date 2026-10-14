@@ -302,7 +302,7 @@ namespace Controller.Audio
             };
             if (victims != null)
                 foreach (var victim in victims)
-                    Finish(victim, victim.Handle.State == AudioPlaybackState.Loading ? AudioCompletion.Cancelled : AudioCompletion.Stopped);
+                    Finish(victim, StopResult(victim));
             var state = GetSlot(slot);
             if (state != null)
             {
@@ -503,13 +503,16 @@ namespace Controller.Audio
         {
             if (p.Handle.IsFinished)
                 return;
-            if (p.Handle.State == AudioPlaybackState.Loading)
-                Finish(p, AudioCompletion.Cancelled);
-            else if (p.Handle.State == AudioPlaybackState.Paused || seconds <= 0)
-                Finish(p, AudioCompletion.Stopped);
-            else
+            // Only a playing sound fades; loading, paused or zero-time stops finish now.
+            if (p.Handle.State == AudioPlaybackState.Playing && seconds > 0)
                 p.Emitter.Transition = Tween.FadeOut(p.Emitter.Envelope, seconds, TweenCompletion.Stop, p);
+            else
+                Finish(p, StopResult(p));
         }
+
+        // Stopping a request that has not started is a cancellation.
+        private static AudioCompletion StopResult(Playback playback)
+            => playback.Handle.State == AudioPlaybackState.Loading ? AudioCompletion.Cancelled : AudioCompletion.Stopped;
 
         public bool Pause(AudioHandle handle, bool pause)
         {
@@ -824,7 +827,7 @@ namespace Controller.Audio
                 return;
             disposed = true;
             foreach (var p in active.ToArray())
-                Finish(p, p.Handle.State == AudioPlaybackState.Loading ? AudioCompletion.Cancelled : AudioCompletion.Stopped);
+                Finish(p, StopResult(p));
             preparations.CancelAll();
             store.Dispose();
             externalIds = null;
