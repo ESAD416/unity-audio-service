@@ -568,9 +568,20 @@ namespace Controller.Audio
                 if (emitter.Pending == playback)
                 {
                     emitter.Pending = null;
-                    emitter.Transition = default;
-                    emitter.Envelope = 1;
-                    ApplyGain(emitter);
+                    // Return the current music from its partial fade at the cancelled
+                    // fade's speed instead of jumping to full volume. A later stop or
+                    // replacement starts from this envelope; another owner's stop stays.
+                    ref var transition = ref emitter.Transition;
+                    if (transition.Completion == TweenCompletion.StartPending && ReferenceEquals(transition.Playback, playback))
+                    {
+                        float fullFadeSeconds = transition.Duration;
+                        transition = new Tween
+                        {
+                            Start = emitter.Envelope,
+                            Target = 1,
+                            Duration = (1 - emitter.Envelope) * fullFadeSeconds
+                        };
+                    }
                 }
 
                 if (emitter.Current == playback)
