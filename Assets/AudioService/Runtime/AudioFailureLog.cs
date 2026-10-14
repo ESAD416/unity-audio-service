@@ -9,7 +9,16 @@ namespace Controller.Audio
     {
         private const int Limit = 64;
         private readonly HashSet<(AudioCategory, string, string)> reported = new();
+        private readonly HashSet<string> controlReasons = new();
         private bool limitReported;
+
+        // Category controls have no sound ID; report each reason once without naming a category.
+        public void ReportControl(AudioController controller, string reason)
+        {
+            if (controlReasons.Add(reason))
+                Debug.LogWarning($"[AudioService] Control call ignored: {reason}.", controller);
+        }
+
         public void Report(AudioController controller, AudioCategory category, AudioId id, string reason,
             ResolvedAudioClip? address = null, bool allowAsync = true)
         {

@@ -331,15 +331,18 @@ namespace Controller.Audio
             return failed;
         }
 
-        public AudioHandle Play(AudioCategory category, AudioId id, PlayOptions options = null) => Request(category, id, null, options, PlaybackSlot.None);
-        public AudioHandle Play(AudioCategory category, AudioClip clip, PlayOptions options = null) => Request(category, default, clip, options, PlaybackSlot.None);
+        /// <summary>Advanced: play in any category without the BGM or dialogue replacement slot.
+        /// BGM loops only when PlayOptions.Loop is set. Daily playback uses AudioService.</summary>
+        public AudioHandle PlayIndependent(AudioCategory category, AudioId id, PlayOptions options = null) => Request(category, id, null, options, PlaybackSlot.None);
+        public AudioHandle PlayIndependent(AudioCategory category, AudioClip clip, PlayOptions options = null) => Request(category, default, clip, options, PlaybackSlot.None);
         public void StopBgm(float fadeOutSeconds = 0) => engine?.StopCategory(AudioCategory.Bgm, AudioValues.Seconds(fadeOutSeconds));
         public void StopSfx(float fadeOutSeconds = 0) => engine?.StopCategory(AudioCategory.Sfx, AudioValues.Seconds(fadeOutSeconds));
         public void StopVoice(float fadeOutSeconds = 0) => engine?.StopCategory(AudioCategory.Voice, AudioValues.Seconds(fadeOutSeconds));
-        public void FadeBus(AudioChannel channel, float targetVolume, float seconds, bool stopAfter = false)
+        public void StopAll(float fadeOutSeconds = 0) => engine?.StopCategory(null, AudioValues.Seconds(fadeOutSeconds));
+        public void FadeBus(AudioChannel channel, float targetVolume, float seconds)
         {
             if (Ready && AudioValues.IsValidChannel(channel))
-                engine.FadeBus(channel, AudioValues.Unit(targetVolume), AudioValues.Seconds(seconds), stopAfter);
+                engine.FadeBus(channel, AudioValues.Unit(targetVolume), AudioValues.Seconds(seconds));
         }
 
         public void SetGamePaused(bool paused) => engine?.SetPaused(paused);
@@ -354,13 +357,6 @@ namespace Controller.Audio
         public int PrewarmSources(int targetCount) => Ready && engine != null ? engine.PrewarmSources(targetCount) : 0;
         /// <summary>Remove only idle sources, retaining minimumCapacity total sources.</summary>
         public int TrimIdleSources(int minimumCapacity = 0, int maxToRemove = 32) => Ready && engine != null ? engine.TrimIdleSources(minimumCapacity, maxToRemove) : 0;
-        public void Preload(AudioCategory category, AudioId id, string group, Action<bool> completed = null)
-        {
-            if (CanPrepare(category, id, group) && TryResolve(category, id, out var current, out var address))
-                current.Preload(address, group, completed);
-            else
-                AudioCallbacks.Invoke(completed, false);
-        }
 
         /// <summary>Retain a clip until group release, completing when Unity reports its audio data loaded.</summary>
         public void PrepareClip(AudioCategory category, AudioId id, string group, Action<bool> completed = null)
@@ -432,10 +428,17 @@ namespace Controller.Audio
                 Debug.LogWarning("[AudioController] " + message, this);
         }
 
+        private bool LogsFailures => logPlaybackFailures && (Application.isEditor || Debug.isDebugBuild);
         internal void ReportPlaybackFailure(AudioCategory category, AudioId id, string reason, ResolvedAudioClip? address = null, bool allowAsync = true)
         {
-            if (logPlaybackFailures && (Application.isEditor || Debug.isDebugBuild))
+            if (LogsFailures)
                 (failureLog ??= new AudioFailureLog()).Report(this, category, id, reason, address, allowAsync);
+        }
+
+        internal void ReportControlFailure(string reason)
+        {
+            if (LogsFailures)
+                (failureLog ??= new AudioFailureLog()).ReportControl(this, reason);
         }
     }
 }

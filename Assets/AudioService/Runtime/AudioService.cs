@@ -72,7 +72,11 @@ namespace Controller.Audio
             {
                 var controller = AudioController.Instance;
                 if (controller != null && controller.Ready) return controller;
-                ReportFailure(AudioCategory.Sfx, default, "Audio service is not ready. Enable AudioCtrl.prefab and call controls from Start or later.");
+                const string reason = "Audio service is not ready. Enable AudioCtrl.prefab and call controls from Start or later";
+                if (controller != null)
+                    controller.ReportControlFailure(reason);
+                else if (Application.isEditor || Debug.isDebugBuild)
+                    (missingControllerLog ??= new AudioFailureLog()).ReportControl(null, reason);
                 return null;
             }
         }
@@ -83,12 +87,14 @@ namespace Controller.Audio
         public static void StopSfx(float fadeOutSeconds = 0f) => Controller?.StopSfx(fadeOutSeconds);
         /// <summary>Stop all voices, including dialogue and overlapping voices.</summary>
         public static void StopVoice(float fadeOutSeconds = 0f) => Controller?.StopVoice(fadeOutSeconds);
+        /// <summary>Stop all BGM, SFX and voices. New playback after this call is not stopped by the old fade.</summary>
+        public static void StopAll(float fadeOutSeconds = 0f) => Controller?.StopAll(fadeOutSeconds);
         /// <summary>
-        /// Fade a whole category (or Master). Does not change saved player volume.
-        /// The gain persists for future playback; fade back to 1 to restore it. stopAfter stops only existing playback.
+        /// Fade a whole category (or Master) without stopping it. Does not change saved player volume.
+        /// The gain persists for future playback; fade back to 1 to restore it.
         /// </summary>
-        public static void FadeBus(AudioChannel channel, float targetVolume, float seconds, bool stopAfter = false)
-            => Controller?.FadeBus(channel, targetVolume, seconds, stopAfter);
+        public static void FadeBus(AudioChannel channel, float targetVolume, float seconds)
+            => Controller?.FadeBus(channel, targetVolume, seconds);
         /// <summary>Set saved player volume in 0..1 when the prefab's settings handler is connected.</summary>
         public static void SetMasterVolume(float volume) => Controller?.SetMasterVolume(volume);
         public static void SetBgmVolume(float volume) => Controller?.SetBgmVolume(volume);

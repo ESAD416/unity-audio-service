@@ -619,11 +619,11 @@ namespace Controller.Audio
             var p = Find(handle);
             if (p == null)
                 return false;
-            StopPlayback(p, seconds, 0f);
+            StopPlayback(p, seconds);
             return true;
         }
 
-        private void StopPlayback(Playback p, float seconds, float target)
+        private void StopPlayback(Playback p, float seconds)
         {
             if (p.Handle.IsFinished)
                 return;
@@ -635,7 +635,7 @@ namespace Controller.Audio
                 p.Emitter.Transition = new Tween
                 {
                     Start = p.Emitter.Envelope,
-                    Target = target,
+                    Target = 0,
                     Duration = seconds,
                     Completion = TweenCompletion.Stop,
                     Playback = p
@@ -700,7 +700,8 @@ namespace Controller.Audio
         }
 
         public AudioChannelDiagnostics GetChannelDiagnostics(AudioChannel channel, float volume) => new AudioChannelDiagnostics(volume, busGains[(int)channel], muted[(int)channel]);
-        public void StopCategory(AudioCategory? category, float seconds, float target = 0f)
+        /// <summary>Stop one category, or every category when null.</summary>
+        public void StopCategory(AudioCategory? category, float seconds)
         {
             using var mutation = callbacks.Begin();
             SyncListenerPause();
@@ -712,9 +713,9 @@ namespace Controller.Audio
                         selected.Add(p);
                 foreach (var p in selected)
                     if (p.Handle.State == AudioPlaybackState.Loading)
-                        StopPlayback(p, 0, target);
+                        StopPlayback(p, 0);
                 foreach (var p in selected)
-                    StopPlayback(p, seconds, target);
+                    StopPlayback(p, seconds);
             }
             finally
             {
@@ -722,17 +723,14 @@ namespace Controller.Audio
             }
         }
 
-        public void FadeBus(AudioChannel channel, float target, float seconds, bool stopAfter)
+        public void FadeBus(AudioChannel channel, float target, float seconds)
         {
-            using var mutation = callbacks.Begin();
             var index = (int)channel;
-            busTweens[index] = default;
-            if (stopAfter)
+            if (seconds <= 0)
             {
-                StopCategory(channel == AudioChannel.Master ? (AudioCategory? )null : (AudioCategory)(index - 1), seconds, target);
-            }
-            else if (seconds <= 0)
+                busTweens[index] = default;
                 busGains[index] = target;
+            }
             else
                 busTweens[index] = new Tween
                 {
@@ -845,18 +843,6 @@ namespace Controller.Audio
                 if (iSource < updating.Count && ReferenceEquals(updating[iSource], emitter))
                     iSource++;
             }
-        }
-
-        public void Preload(ResolvedAudioClip address, string group, Action<bool> completed)
-        {
-            using var mutation = callbacks.Begin();
-            store.Request(address, true, lease =>
-            {
-                bool success = lease?.Clip != null;
-                AudioCallbacks.Dispose(lease);
-                if (completed != null)
-                    callbacks.Enqueue(() => AudioCallbacks.Invoke(completed, success));
-            }, group);
         }
 
         public void PrepareClip(ResolvedAudioClip address, string group, Action<bool> completed)
