@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace Controller.Audio
+namespace Controller.Audio.Samples
 {
     /// <summary>
     /// 提供 ContextMenu 便於在編輯器測試 AudioController 的播放功能。
@@ -34,10 +34,14 @@ namespace Controller.Audio
         [ContextMenu("Audio/Loading/Prepare and Play BGM")]
         private void ContextPrepareBgm()
         {
-            if (!Application.isPlaying || !isActiveAndEnabled || !TryGetController(out var controller) || string.IsNullOrWhiteSpace(bgmKey)) return;
+            if (!Application.isPlaying || !isActiveAndEnabled || !HasKey(bgmKey, "BGM")) return;
             ContextReleasePreparedBgm();
-            controller.Initialize();
-            if (!controller.Ready) return;
+            var controller = AudioController.Instance;
+            if (controller == null || !controller.Ready)
+            {
+                Debug.LogWarning("[AudioControllerDebugMenu] Enable AudioCtrl.prefab before preparing BGM.", this);
+                return;
+            }
             preparedController = controller;
             preparedGroup = "AudioDebugMenu:" + GetEntityId().ToString();
             string key = bgmKey;
@@ -74,16 +78,15 @@ namespace Controller.Audio
             ResolveSettingsHandler();
         }
 
-        private bool TryGetController(out AudioController controller)
+        // Playback and controls go through AudioService, which reports a missing or
+        // not-ready AudioCtrl itself; this menu only reports its own empty keys.
+        private bool HasKey(string key, string label)
         {
-            controller = AudioController.Instance;
-            if (controller == null)
-            {
-                Debug.LogWarning("[AudioControllerDebugMenu] AudioController.Instance is null, ensure controller is present in the scene.");
-                return false;
-            }
+            if (!string.IsNullOrWhiteSpace(key))
+                return true;
 
-            return true;
+            Debug.LogWarning($"[AudioControllerDebugMenu] {label} key is empty.", this);
+            return false;
         }
 
         private bool TryGetSettingsHandler(out IAudioSettingsHandler handler)
@@ -110,80 +113,37 @@ namespace Controller.Audio
         [ContextMenu("Audio/Play/BGM (Key)")]
         private void ContextPlayBgmByKey()
         {
-            if (!TryGetController(out var controller)) return;
-            if (string.IsNullOrEmpty(bgmKey))
-            {
-                Debug.LogWarning("[AudioControllerDebugMenu] BGM key is empty");
-                return;
-            }
-            AudioService.PlayBgm(bgmKey, new PlayOptions { AllowAsyncLoad = keyAllowAsyncLoad });
+            if (HasKey(bgmKey, "BGM"))
+                AudioService.PlayBgm(bgmKey, new PlayOptions { AllowAsyncLoad = keyAllowAsyncLoad });
         }
         [ContextMenu("Audio/Play/SFX (Key)")]
         private void ContextPlaySfxByKey()
         {
-            if (!TryGetController(out var controller)) return;
-            if (string.IsNullOrEmpty(sfxKey))
-            {
-                Debug.LogWarning("[AudioControllerDebugMenu] SFX key is empty");
-                return;
-            }
-            AudioService.PlaySfx(sfxKey, new PlayOptions { Loop = sfxKeyLoop, AllowAsyncLoad = keyAllowAsyncLoad });
+            if (HasKey(sfxKey, "SFX"))
+                AudioService.PlaySfx(sfxKey, new PlayOptions { Loop = sfxKeyLoop, AllowAsyncLoad = keyAllowAsyncLoad });
         }
         [ContextMenu("Audio/Play/Voice (Key)")]
         private void ContextPlayVoiceByKey()
         {
-            if (!TryGetController(out var controller)) return;
-            if (string.IsNullOrEmpty(voiceKey))
-            {
-                Debug.LogWarning("[AudioControllerDebugMenu] Voice key is empty");
-                return;
-            }
-            AudioService.PlayVoice(voiceKey, new PlayOptions { Loop = voiceKeyLoop, AllowAsyncLoad = keyAllowAsyncLoad });
+            if (HasKey(voiceKey, "Voice"))
+                AudioService.PlayVoice(voiceKey, new PlayOptions { Loop = voiceKeyLoop, AllowAsyncLoad = keyAllowAsyncLoad });
         }
 
         [ContextMenu("Audio/Stop/BGM")]
-        private void ContextStopBgm()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.StopBgm();
-        }
+        private void ContextStopBgm() => AudioService.StopBgm();
         [ContextMenu("Audio/Stop/SFX")]
-        private void ContextStopSfxLoop()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.StopSfx();
-        }
+        private void ContextStopSfxLoop() => AudioService.StopSfx();
         [ContextMenu("Audio/Stop/Voice")]
-        private void ContextStopVoice()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.StopVoice();
-        }
+        private void ContextStopVoice() => AudioService.StopVoice();
 
         [ContextMenu("Audio/Set Volume/Master")]
-        private void ContextSetMasterVolume()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.SetMasterVolume(masterVolume);
-        }
+        private void ContextSetMasterVolume() => AudioService.SetMasterVolume(masterVolume);
         [ContextMenu("Audio/Set Volume/BGM")]
-        private void ContextSetBgmVolume()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.SetBgmVolume(bgmVolume);
-        }
+        private void ContextSetBgmVolume() => AudioService.SetBgmVolume(bgmVolume);
         [ContextMenu("Audio/Set Volume/SFX")]
-        private void ContextSetSfxVolume()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.SetSfxVolume(sfxVolume);
-        }
+        private void ContextSetSfxVolume() => AudioService.SetSfxVolume(sfxVolume);
         [ContextMenu("Audio/Set Volume/Voice")]
-        private void ContextSetVoiceVolume()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.SetVoiceVolume(voiceVolume);
-        }
+        private void ContextSetVoiceVolume() => AudioService.SetVoiceVolume(voiceVolume);
 
         [ContextMenu("Audio/Settings/Set Master (Handler)")]
         private void ContextSetMasterViaHandler()
@@ -226,73 +186,40 @@ namespace Controller.Audio
         }
 
         [ContextMenu("Audio/Fade/BGM Fade Out 1s")]
-        private void ContextFadeOutBgm()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.StopBgm(1f);
-        }
+        private void ContextFadeOutBgm() => AudioService.StopBgm(1f);
 
         [ContextMenu("Audio/Fade/BGM Fade In 1s")]
         private void ContextFadeInBgm()
         {
-            if (!TryGetController(out var controller)) return;
-            if (string.IsNullOrEmpty(bgmKey))
-            {
-                Debug.LogWarning("[AudioControllerDebugMenu] BGM key is empty for fade in test");
-                return;
-            }
-            AudioService.PlayBgm(bgmKey, new PlayOptions { AllowAsyncLoad = keyAllowAsyncLoad, FadeInSeconds = 1 });
+            if (HasKey(bgmKey, "BGM"))
+                AudioService.PlayBgm(bgmKey, new PlayOptions { AllowAsyncLoad = keyAllowAsyncLoad, FadeInSeconds = 1 });
         }
 
         [ContextMenu("Audio/Fade/BGM Transition 1s/1s")]
         private void ContextTransitionBgm()
         {
-            if (!TryGetController(out var controller)) return;
-            if (string.IsNullOrEmpty(bgmTransitionKey))
-            {
-                Debug.LogWarning("[AudioControllerDebugMenu] Transition BGM key is empty");
-                return;
-            }
-
-            AudioService.PlayBgm(bgmTransitionKey, new PlayOptions { AllowAsyncLoad = keyAllowAsyncLoad, FadeInSeconds = 1, FadeOutSeconds = 1 });
+            if (HasKey(bgmTransitionKey, "Transition BGM"))
+                AudioService.PlayBgm(bgmTransitionKey, new PlayOptions { AllowAsyncLoad = keyAllowAsyncLoad, FadeInSeconds = 1, FadeOutSeconds = 1 });
         }
 
         [ContextMenu("Audio/Fade/SFX Loop Fade 1s")]
         private void ContextFadeSfxLoop()
         {
-            if (!TryGetController(out var controller)) return;
-            if (string.IsNullOrEmpty(sfxKey))
-            {
-                Debug.LogWarning("[AudioControllerDebugMenu] SFX key is empty for fade test");
-                return;
-            }
-            AudioService.PlaySfx(sfxKey, new PlayOptions { Loop = true, AllowAsyncLoad = keyAllowAsyncLoad, FadeInSeconds = 1 });
+            if (HasKey(sfxKey, "SFX"))
+                AudioService.PlaySfx(sfxKey, new PlayOptions { Loop = true, AllowAsyncLoad = keyAllowAsyncLoad, FadeInSeconds = 1 });
         }
 
         [ContextMenu("Audio/Fade/SFX Loop Fade Out 1s")]
-        private void ContextFadeOutSfxLoop()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.StopSfx(fadeOutSeconds: 1f);
-        }
+        private void ContextFadeOutSfxLoop() => AudioService.StopSfx(1f);
 
         [ContextMenu("Audio/Fade/Voice Loop Fade 1s")]
         private void ContextFadeVoiceLoop()
         {
-            if (!TryGetController(out var controller)) return;
-            if (string.IsNullOrEmpty(voiceKey))
-            {
-                Debug.LogWarning("[AudioControllerDebugMenu] Voice key is empty for fade test");
-                return;
-            }
-            AudioService.PlayVoice(voiceKey, new PlayOptions { Loop = true, AllowAsyncLoad = keyAllowAsyncLoad, FadeInSeconds = 1 });
+            if (HasKey(voiceKey, "Voice"))
+                AudioService.PlayVoice(voiceKey, new PlayOptions { Loop = true, AllowAsyncLoad = keyAllowAsyncLoad, FadeInSeconds = 1 });
         }
 
         [ContextMenu("Audio/Fade/Voice Loop Fade Out 1s")]
-        private void ContextFadeOutVoiceLoop()
-        {
-            if (!TryGetController(out var controller)) return;
-            controller.StopVoice(fadeOutSeconds: 1f);
-        }
+        private void ContextFadeOutVoiceLoop() => AudioService.StopVoice(1f);
     }
 }
