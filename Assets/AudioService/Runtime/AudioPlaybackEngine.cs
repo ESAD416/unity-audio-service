@@ -496,11 +496,16 @@ namespace Controller.Audio
         private static bool SameAudio(Playback playback, AudioHandle handle) => playback.Handle.Category == handle.Category && playback.Handle.AudioId.Equals(handle.AudioId);
         private void Reject(AudioHandle handle, AudioCompletion result, string reason)
         {
-            LastFailure = reason;
+            RecordFailure(reason);
             handle.Finish(result, reason);
-            host.ReportFailure(reason);
             if (result == AudioCompletion.Failed)
                 host.ReportPlaybackFailure(handle.Category, handle.AudioId, reason);
+        }
+
+        private void RecordFailure(string reason)
+        {
+            LastFailure = reason;
+            host.ReportFailure(reason);
         }
 
         private void Loaded(Playback playback, ClipHold hold, ResolvedAudioClip? address = null)
@@ -592,69 +597,80 @@ namespace Controller.Audio
         {
             if (playback.Handle.IsFinished)
                 return;
+            // Commit every state change before releases and notifications can reenter.
             RemoveActive(playback);
             var cancel = playback.CancelLoad;
             playback.CancelLoad = null;
             var hold = playback.Hold;
             playback.Hold = default;
-            var state = GetSlot(playback.Slot);
-            if (state != null)
-            {
-                if (state.Pending == playback)
-                    state.Pending = null;
-                if (state.Current == playback)
-                    state.Current = null;
-            }
-
-            var emitter = playback.Emitter;
-            playback.Emitter = null;
-            Playback pending = null;
-            if (emitter != null)
-            {
-                if (emitter.Pending == playback)
-                {
-                    emitter.Pending = null;
-                    // Return the current music from its partial fade at the cancelled
-                    // fade's speed instead of jumping to full volume. A later stop or
-                    // replacement starts from this envelope; another owner's stop stays.
-                    ref var transition = ref emitter.Transition;
-                    if (transition.Completion == TweenCompletion.StartPending && ReferenceEquals(transition.Playback, playback))
-                    {
-                        float fullFadeSeconds = transition.Duration;
-                        transition = new Tween
-                        {
-                            Start = emitter.Envelope,
-                            Target = 1,
-                            Duration = (1 - emitter.Envelope) * fullFadeSeconds
-                        };
-                    }
-                }
-
-                if (emitter.Current == playback)
-                {
-                    emitter.Source.Stop();
-                    emitter.Source.clip = null;
-                    emitter.Current = null;
-                    emitter.Transition = default;
-                    emitter.Envelope = 1;
-                    pending = emitter.Pending;
-                }
-            }
-
-            Recycle(emitter);
+            LeaveSlot(playback);
+            var waiting = LeaveEmitter(playback);
             if (reason != null)
-            {
-                LastFailure = reason;
-                host.ReportFailure(reason);
-            }
-
+                RecordFailure(reason);
             playback.Handle.Finish(result, reason);
             // Store leases update internal counts now. Actual provider releases
             // are queued by the store until this entire engine mutation commits.
             AudioCallbacks.Invoke(cancel);
             hold.Release();
-            if (resumePending && pending != null && !disposed)
-                Start(pending);
+            if (resumePending && waiting != null && !disposed)
+                Start(waiting);
+        }
+
+        private void LeaveSlot(Playback playback)
+        {
+            var state = GetSlot(playback.Slot);
+            if (state == null)
+                return;
+            if (state.Pending == playback)
+                state.Pending = null;
+            if (state.Current == playback)
+                state.Current = null;
+        }
+
+        // Detach from the native source and recycle it once unused. Returns the request
+        // waiting on that source when the finished playback was its current sound.
+        private Playback LeaveEmitter(Playback playback)
+        {
+            var emitter = playback.Emitter;
+            playback.Emitter = null;
+            if (emitter == null)
+                return null;
+            Playback waiting = null;
+            if (emitter.Pending == playback)
+            {
+                emitter.Pending = null;
+                RestoreCancelledFade(emitter, playback);
+            }
+
+            if (emitter.Current == playback)
+            {
+                emitter.Source.Stop();
+                emitter.Source.clip = null;
+                emitter.Current = null;
+                emitter.Transition = default;
+                emitter.Envelope = 1;
+                waiting = emitter.Pending;
+            }
+
+            Recycle(emitter);
+            return waiting;
+        }
+
+        // Return the current music from its partial fade at the cancelled fade's speed
+        // instead of jumping to full volume. A later stop or replacement starts from this
+        // envelope; another owner's stop transition stays.
+        private static void RestoreCancelledFade(Emitter emitter, Playback cancelled)
+        {
+            ref var transition = ref emitter.Transition;
+            if (transition.Completion != TweenCompletion.StartPending || !ReferenceEquals(transition.Playback, cancelled))
+                return;
+            float fullFadeSeconds = transition.Duration;
+            transition = new Tween
+            {
+                Start = emitter.Envelope,
+                Target = 1,
+                Duration = (1 - emitter.Envelope) * fullFadeSeconds
+            };
         }
 
         public bool Stop(AudioHandle handle, float seconds)

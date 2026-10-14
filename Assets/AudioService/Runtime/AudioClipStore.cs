@@ -94,7 +94,7 @@ namespace Controller.Audio
             if (!Usable || !entries.TryGetValue((category, id), out var entry) || !entry.IsResident)
                 return false;
             // Ordinary playback retains the entry exactly as Request(group: null).
-            entry.Retained = true;
+            Retain(entry, group: null);
             entry.Users++;
             usage = new Usage(this, entry);
             return true;
@@ -113,33 +113,13 @@ namespace Controller.Audio
         public Action Request(ResolvedAudioClip address, bool allowAsync, Action<AudioClipLease> callback, string group = null)
         {
             using var mutation = callbacks.Begin();
-            if (!Usable)
+            if (!TryGetEntry(address, allowAsync, out var entry, out bool created))
             {
                 AudioCallbacks.Deliver(callback, null);
                 return NoCancellation;
             }
 
-            var key = Key(address);
-            bool created = !entries.TryGetValue(key, out var entry) || entry.Failed;
-            if (!created && entry.Loading && !allowAsync)
-            {
-                AudioCallbacks.Deliver(callback, null);
-                return NoCancellation;
-            }
-
-            if (created)
-            {
-                entry = new Entry
-                {
-                    Key = key
-                };
-                entries[key] = entry;
-            }
-
-            if (group != null)
-                entry.Groups.Add(group);
-            else
-                entry.Retained = true;
+            Retain(entry, group);
             if (!entry.Loading)
             {
                 // Resident requests have no pending work and need no waiter/list/cancel closure.
@@ -154,26 +134,57 @@ namespace Controller.Audio
             };
             entry.Waiters.Add(waiter);
             if (created)
+                StartLoad(entry, address, allowAsync);
+            return waiter.Callback == null ? NoCancellation : CreateCancellation(entry, waiter);
+        }
+
+        // Join the existing entry or create one. A synchronous-only request cannot
+        // join a load that is still pending; a failed entry is replaced.
+        private bool TryGetEntry(ResolvedAudioClip address, bool allowAsync, out Entry entry, out bool created)
+        {
+            created = false;
+            entry = null;
+            if (!Usable)
+                return false;
+            var key = Key(address);
+            if (entries.TryGetValue(key, out entry) && !entry.Failed)
+                return allowAsync || !entry.Loading;
+            created = true;
+            entry = new Entry
             {
-                try
+                Key = key
+            };
+            entries[key] = entry;
+            return true;
+        }
+
+        // Ordinary requests keep the clip cached until ReleaseUnused; group requests until ReleaseGroup.
+        private static void Retain(Entry entry, string group)
+        {
+            if (group != null)
+                entry.Groups.Add(group);
+            else
+                entry.Retained = true;
+        }
+
+        private void StartLoad(Entry entry, ResolvedAudioClip address, bool allowAsync)
+        {
+            try
+            {
+                if (allowAsync)
+                    AcquireAsync(address, entry);
+                else
                 {
-                    if (!allowAsync)
-                    {
-                        provider.TryAcquireClip(address, out var lease);
-                        Complete(entry, lease);
-                    }
-                    else
-                        AcquireAsync(address, entry);
-                }
-                catch (Exception error)
-                {
-                    // A throwing provider is a failed load; keep its stack trace visible.
-                    Debug.LogException(error);
-                    Complete(entry, null);
+                    provider.TryAcquireClip(address, out var lease);
+                    Complete(entry, lease);
                 }
             }
-
-            return waiter.Callback == null ? NoCancellation : CreateCancellation(entry, waiter);
+            catch (Exception error)
+            {
+                // A throwing provider is a failed load; keep its stack trace visible.
+                Debug.LogException(error);
+                Complete(entry, null);
+            }
         }
 
         // Keep async and cancellation captures off inline-completed requests.
