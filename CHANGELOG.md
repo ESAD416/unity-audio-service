@@ -1,5 +1,15 @@
 # 變更紀錄
 
+## Unreleased - 專案審查七項修正（2026-10-14）
+
+- 取消等待中的 BGM 轉場時，目前音樂從當下包絡以原淡出速度回到 1，不再瞬間跳回全音量；之後的停止或替換從當下音量開始，目前音樂自己的 Stop 淡出也不再被清除。
+- Controller 在 Single 模式載入場景時自動釋放普通播放快取，疊加場景不觸發；仍在播放的聲音與 PrepareClip 群組保留。SceneAudioSample 不再自行清除全服務快取。
+- 音訊裝置變更（含 AudioSettings.Reset）時，循環播放保留 handle 並在原生聲源停止時從頭重播，暫停狀態保留；單次播放與 Stop 淡出中的循環維持 Failed、Loading 維持 Cancelled。
+- Store、Fallback 與 PrepareClip 吞下的 Provider 例外改以 `Debug.LogException` 記錄；未就緒控制警告改為不帶分類的 `Control call ignored`，並修正句尾重複句號。設定不同的重複 AudioController 被移除時會警告，相同設定的複本仍安靜移除。
+- **破壞性變更**：`AudioController.Play` 改名 `PlayIndependent`；移除 `Preload`（改用 `PrepareClip`）與 `FadeBus` 的 `stopAfter` 參數，新增 `AudioService.StopAll`／`AudioController.StopAll`；`MaxVoices` 改名 `MaxConcurrentSounds`。序列化欄位 `maxVoices`／`saveImmediately` 改名並以 `FormerlySerializedAs` 自動遷移，兩個 Prefab 已更新。遷移方式見 Migration.md。
+- Runtime／Editor／Samples 中多個狀態變更寫在同一行的程式改為一行一個；Inspector 的 Max Concurrent Sounds／Auto Save 直接使用欄位名稱與 Tooltip。
+- 本機 PlayMode 395／395、EditMode 28／28 通過（修改前基準 380／380），新增 15 項 PlayMode 與 1 項 EditMode 回歸；真實 AudioSettings.Reset 案例確認循環音重播、單次播放為 Failed。本輪未重跑 macOS Player、Resources-only 獨立建置與量測；詳見改善計畫 §5.24。
+
 ## Unreleased - 設定來源與 Tick 責任整理（2026-10-05）
 
 - Debug Menu 移除設定介面快取，每次從目前的序列化來源解析；替換、清空或銷毀來源後不再操作舊 handler，保留 Unity 物件存活檢查與警告時序。

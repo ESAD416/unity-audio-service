@@ -85,21 +85,22 @@ var wind = AudioService.PlaySfx("wind", new PlayOptions
 // 不再需要這個循環時：wind.Stop();
 ```
 
-`PlayOptions` 是額外需求才使用的設定。BGM 轉場可設定 `FadeOutSeconds` 與 `FadeInSeconds`，目前為先淡出再淡入；停止單次播放的時長傳給 `handle.Stop(seconds)`。
+`PlayOptions` 是額外需求才使用的設定。BGM 轉場可設定 `FadeOutSeconds` 與 `FadeInSeconds`，目前為先淡出再淡入；轉場還在淡出時被取消或替換，目前音樂會從當下音量繼續，不會跳回原音量。停止單次播放的時長傳給 `handle.Stop(seconds)`。
 
 ## 停止、音量與淡出的範圍
 
 | 目的 | 呼叫 |
 | --- | --- |
 | 停止這一個聲音 | `handle.Stop(0.5f)` |
-| 停止所有 BGM／SFX／Voice | `AudioService.StopBgm()`／`StopSfx()`／`StopVoice()`；可傳淡出秒數 |
+| 停止某一類的全部聲音 | `AudioService.StopBgm()`／`StopSfx()`／`StopVoice()`；可傳淡出秒數 |
+| 停止所有聲音 | `AudioService.StopAll(0.5f)` |
 | 修改玩家音量並保存 | `AudioService.SetMasterVolume(0.8f)`；另有 `SetBgmVolume`、`SetSfxVolume`、`SetVoiceVolume` |
 | 暫時淡出整個音效分類 | `AudioService.FadeBus(AudioChannel.Sfx, 0f, 0.5f)` |
 | 恢復分類的暫時增益 | `AudioService.FadeBus(AudioChannel.Sfx, 1f, 0.5f)` |
 | 暫時靜音，不停止播放 | `AudioService.SetMuted(AudioChannel.Master, true)` |
 | 遊戲暫停／繼續 | `AudioService.SetGamePaused(true)`／`SetGamePaused(false)` |
 
-音量使用 0～1。`FadeBus` 涵蓋全部同類聲音，不改玩家保存的音量；淡變後的增益也套用到後續新聲音，需恢復至 1 才解除分類衰減。單純停止一批聲音請用 `StopSfx(seconds)` 等方法。
+音量使用 0～1。`FadeBus` 涵蓋全部同類聲音，不改玩家保存的音量；淡變後的增益也套用到後續新聲音，需恢復至 1 才解除分類衰減。`FadeBus` 不會停止聲音；要停止請用 `StopSfx(seconds)`、`StopAll(seconds)` 等方法。
 
 `Time.timeScale = 0` 不會自動呼叫音訊暫停。暫停時仍需播放的 UI 音效，可在 `PlayOptions` 設 `IgnoreGamePause = true`。
 
@@ -114,6 +115,8 @@ var wind = AudioService.PlaySfx("wind", new PlayOptions
 - 缺少 Controller：放入並啟用 AudioCtrl，從 Start 或之後呼叫。
 - 找不到素材：檢查類別資料夾、key 大小寫與副檔名；有 Catalog 時檢查映射。
 - 播放成功但聽不到：檢查 AudioListener、Master／分類音量、靜音、暫停，以及先前是否把 FadeBus 降到 0。
+- 插拔耳機或切換輸出裝置後：循環聲音（包含 `PlayBgm` 的音樂）會從頭自動重播，handle 保持有效；單次音效與語音會結束為 Failed，需要時由呼叫端重播。
+- 換場後 Console 出現「Removed duplicate AudioController」：新場景的 AudioCtrl 和已存在的那個使用不同的素材來源或 Catalog，已被移除。保留一個 AudioCtrl，或改設定現有的那個。
 
 同一設定下，相同失敗只提示一次，最多記錄 64 種，再顯示一次抑制提示。重新啟用 Controller、更換／刷新 Provider 後重設。Controller Inspector 可關閉 `Log Playback Failures`；一般並發拒絕不自動警告。
 
@@ -130,11 +133,13 @@ sound.Completed += h =>
 
 結束後訂閱仍會收到結果。缺少或停用 Controller 時，播放入口也會回傳 Failed handle，便於處理；服務不會默默建立場景物件。Controller Inspector 顯示 Ready、播放數與最近一次歷史失敗。
 
-Inspector 的 `Max Concurrent Sounds` 是 BGM、SFX、Voice 合計的並發請求上限，包含載入中與暫停，`0` 表示服務不設上限。音量設定元件的 `Auto Save` 會在最後一次音量變動後等待 `Save Delay` 再儲存，聲音音量立即生效；停用元件或進入背景仍會保存待寫入設定。這兩項顯示名稱調整不改序列化欄位；本輪依賴配置等其他變更仍須依遷移指南調整自訂 Prefab。
+Inspector 的 `Max Concurrent Sounds` 是 BGM、SFX、Voice 合計的並發請求上限，包含載入中與暫停，`0` 表示服務不設上限。音量設定元件的 `Auto Save` 會在最後一次音量變動後等待 `Save Delay` 再儲存，聲音音量立即生效；停用元件或進入背景仍會保存待寫入設定。這兩項的序列化欄位已改名為 `maxConcurrentSounds`／`autoSave`，舊 Prefab 與場景會自動沿用原本的值。
+
+一般播放過的素材會留在快取，直到下一次非疊加（Single）換場時自動釋放；仍在播放的聲音與 `PrepareClip` 群組不受影響，基本播放不需要自己清快取。
 
 ## 需要時再使用
 
-- **載入畫面與換場**：[完整場景素材範例](Documentation/SceneAudio.md)，包含準備、取消、停止自己持有的聲音、釋放保留，以及跨場景 BGM 的歸屬。
+- **載入畫面與換場**：[完整場景素材範例](Documentation/SceneAudio.md)，包含準備、取消、停止自己持有的聲音、釋放保留、跨場景常駐素材，以及跨場景 BGM 的歸屬。
 - **Catalog、自訂來源、快取、預熱與並發限制**：[進階 API 參考](Documentation/AudioServiceReference.md)。
 - **Addressables**：安裝 Addressables 後使用 [AudioCtrlAddressables.prefab](Assets/AudioService/Integrations/Addressables/AudioCtrlAddressables.prefab)。基本 AudioCtrl 僅使用 Resources；adapter 位於獨立 assembly。
 - **既有程式升級**：[重構遷移指南](Documentation/Migration.md)。舊 Controller 播放包裝、分支淡變、Bootstrap 與舊 Provider 介面已移除；`AudioService` 的播放規則保持一致。
@@ -143,8 +148,6 @@ Inspector 的 `Max Concurrent Sounds` 是 BGM、SFX、Voice 合計的並發請�
 
 目前是 Unity 專案，尚未完成 UPM 套件交付。驗證環境為 Unity 6000.6.3f1、Addressables 2.11.2、Test Framework 1.8.0。核心不再引用 Addressables；可選整合位於 `Integrations/Addressables`。範例不代表已驗證其他版本或平台。
 
-本輪後續精簡：PlayMode 367／367、Editor／Reload 26／26、macOS Player 無圖形／批次 Metal 各 288／288 通過。未安裝 Addressables 的獨立專案亦重新完成 Player 建置與播放／PrepareClip 驗證；詳見改善計畫 §5.21。視窗畫面、人工操作與聽感仍未驗收，也尚未進行新使用者操作研究。
-
-目前已修正 Controller 回呼中關閉／重建造成的舊流程續跑與殘留訂閱，收斂 Addressables 租約交付，並將控制失敗診斷與 handle 建立分開；公開播放／準備 API 不變。指定量測中，直接 Addressables callback 暖命中由每次 320 → 192 bytes，已去重的未就緒控制警告由 88 → 0 bytes；暖快取播放仍為每次 192 bytes。批次快照重用因 CPU／常駐容量取捨未採用；既有通知、準備、Catalog 與素材釋放優化保留，歷次量測與限制見改善計畫 §5.17～5.21。
+最近一輪（2026-10-14）依專案審查修正七項：取消 BGM 轉場時目前音樂不再瞬間回到全音量；非疊加換場自動釋放一般播放快取；音訊裝置變更後循環聲音自動重播；Provider 例外會記錄 stack trace；設定不同的重複 AudioController 會提示；播放與停止入口改為 `PlayIndependent`、`StopAll`，並移除 `Preload` 與 `FadeBus(stopAfter)`；欄位名稱與程式格式整理。本機 PlayMode 395／395、EditMode 28／28 通過；本輪未重跑 macOS Player 與 Resources-only 獨立建置，前輪結果見改善計畫 §5.21。破壞性變更見[遷移指南](Documentation/Migration.md#2026-10-14-審查修正)。視窗畫面、人工操作與聽感仍未驗收，也尚未進行新使用者操作研究。
 
 可靠性、效能與本輪使用流程驗證見[改善計畫](unity-audio-service-improvement-plan.md)，相容性紀錄見 [CHANGELOG](CHANGELOG.md)。入門場景和範例會隨專案提供；本機測試及工具依既有規則留在受 Git 忽略的 Tests／Tools／work。

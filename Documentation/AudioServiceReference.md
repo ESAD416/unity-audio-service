@@ -24,8 +24,8 @@
 
 所有 API 與 Provider 回呼在 Unity 主執行緒呼叫。
 
-- BGM 與對話各有一個邏輯替換槽。舊等待請求被新有效請求取消；正在播放的聲音只在新素材成功後替換。BGM 轉場是先淡出再淡入，不是 crossfade。
-- SFX 與 Overlap 語音各自獨立，Loop 不改變擁有權。進階 `controller.Play(category, idOrClip, options)` 亦是獨立播放。
+- BGM 與對話各有一個邏輯替換槽。舊等待請求被新有效請求取消；正在播放的聲音只在新素材成功後替換。BGM 轉場是先淡出再淡入，不是 crossfade。等待中的轉場被取消時，目前音樂從當下包絡以原淡出速度回到 1；新的停止或替換從當下包絡開始，不會先跳回全音量。目前音樂自己的 Stop 淡出不因取消等待請求而中斷。
+- SFX 與 Overlap 語音各自獨立，Loop 不改變擁有權。進階 `controller.PlayIndependent(category, idOrClip, options)` 不使用任何替換槽；BGM 分類也只在 `PlayOptions.Loop` 時循環，適合與 BGM 槽並存的音樂層。
 - PlayOptions 在接納時複製；後續修改呼叫端物件不改變既有請求。FadeOutSeconds 用於 BGM 替換，單次停止使用 `handle.Stop(seconds)`。
 - 狀態為 Loading／Playing／Paused／Finished，結果為 Completed／Stopped／Cancelled／Failed／Rejected。Loading 取消回傳 Cancelled；已播放主動停止為 Stopped。
 - 終態、並發名額與聲源清理先提交，再派送 Provider 釋放與 Completed。回呼重新播放或關閉服務時看到完整狀態；例外隔離，晚訂閱仍收到一次保留結果。
@@ -76,7 +76,7 @@ Addressables catalog 更新成功後呼叫 `controller.RefreshClipProvider()`。
 | `TryAcquireClip(address, out lease)` | 明確同步取得，不等待 async；成功的 lease 保持素材有效，失敗回傳 false／null |
 | `AcquireClip(address, completed)` | 可同步或稍後完成，恰好回呼一次；失敗 null，成功轉移一份 lease 給接收者 |
 
-沒有同步能力仍實作 TryAcquireClip 並回傳 false。每份 lease 的 Dispose 冪等；Provider 銷毀或刷新後，已發出且未釋放的 lease 仍有效。Provider 實作負責實際 native 資產操作，不能以「目前沒在快取表」推論資產已無使用者。
+沒有同步能力仍實作 TryAcquireClip 並回傳 false。Provider 的 TryAcquireClip／AcquireClip 拋出例外時，Store、Fallback 與 PrepareClip 以 `Debug.LogException` 記錄後視為取得失敗。每份 lease 的 Dispose 冪等；Provider 銷毀或刷新後，已發出且未釋放的 lease 仍有效。Provider 實作負責實際 native 資產操作，不能以「目前沒在快取表」推論資產已無使用者。
 
 可選 `IAudioClipProviderChanges` 提供 Changed；`IAudioClipProviderRefresh` 提供刷新；`IAudioClipProviderDiagnostics.DescribeLookup` 提供失敗時的來源描述。核心不依具體型別分支，也不再代跑舊 coroutine。
 
@@ -97,30 +97,29 @@ audio.PrepareClip(AudioCategory.Bgm, "music.title", "level-1", ready =>
 });
 // 離開使用範圍時：
 audio.ReleaseGroup("level-1");
-audio.ReleaseUnusedClips();
 ```
 
-Preload 保證取得 AudioClip 資產；PrepareClip 另呼叫需要的 LoadAudioData，完成時 Unity 回報 Loaded。主執行緒呼叫可能阻塞，適合載入畫面；Streaming 的 Loaded 不代表全曲已解碼或輸出零延遲。
+PrepareClip 取得 AudioClip 資產並呼叫需要的 LoadAudioData，完成時 Unity 回報 Loaded；它是唯一的提前準備入口。主執行緒呼叫可能阻塞，適合載入畫面；Streaming 的 Loaded 不代表全曲已解碼或輸出零延遲。
 
 - 同一分類＋解析後 ID 的等待者共享 Store 載入；取消一位不取消其他使用者。取消不表示底層 Unity 載入能被中止，遲到結果仍正確歸還。
 - ReleaseGroup 取消該群組的等待／準備並移除保留，不停止播放，也不動其他群組／普通快取。回呼新建的需求不屬於舊批次。
-- ReleaseUnusedClips 清除普通快取保留；播放使用者或群組仍存在時不釋放。普通播放也會建立快取保留。
+- 普通播放會建立快取保留。Controller 在 `SceneManager.sceneLoaded` 收到非疊加（Single）載入時自動執行 ReleaseUnusedClips，與 Unity 卸載未使用資產的時機一致；疊加場景不觸發。播放使用者或群組仍存在時不釋放，跨場景仍在播放的素材在播放結束後釋放。需要跨場景常駐的素材用長駐群組的 PrepareClip 持有。疊加流程需要時可自行呼叫 ReleaseUnusedClips。
 - Provider 更換／刷新、Shutdown 與音訊重設使尚未完成的 PrepareClip 回呼 false 一次。成功準備由群組繼續持有，直到釋放。
 
-PrepareClip 的內部狀態集中於 AudioPreparationQueue，由引擎傳入當下 Store；不新增場景元件、不自行保留舊 Store。公開入口、每幀檢查、回呼時機與 Preload 的較弱保證皆保持。
+PrepareClip 的內部狀態集中於 AudioPreparationQueue，由引擎傳入當下 Store；不新增場景元件、不自行保留舊 Store。公開入口、每幀檢查與回呼時機皆保持。
 - 不主動 UnloadAudioData；直接 clip 的生命週期由外部負責。尚無 LRU 或自動記憶體預算淘汰。
 
 完整換場、取消與 BGM 擁有者範例見 [SceneAudio](SceneAudio.md)。長 BGM 的 Streaming／背景載入設定可透過 `Tools > Audio Service > Audio Imports` 明確檢查或套用；工具不會在匯入時自動修改檔案。
 
 ## 並發與聲源
 
-MaxVoices=0 表示服務不設限制。總量及單音效限制包含 Playing／Paused／Loading；單音效以分類＋解析後 ID 計算。替換槽的現有與等待播放不重複占用替換的接納預算。
+MaxConcurrentSounds=0 表示服務不設限制。總量及單音效限制包含 Playing／Paused／Loading；單音效以分類＋解析後 ID 計算。替換槽的現有與等待播放不重複占用替換的接納預算。
 
 先驗證全部限制，再執行 StealOldest。單音效淘汰可同時釋出全域容量；仍遇 RejectNew 則完全拒絕，不先破壞舊播放。降低上限不立即停止現有聲音，下一次接納才按政策處理。
 
 所有 AudioSource 共用動態池，沒有固定五組相容聲源。Loading 只預約並發名額，直到素材可播放才借用來源。回收清除 clip、loop、pitch、路由、暫停與包絡；使用中來源才參與 Tick 與增益更新，閒置來源在下次播放前套用目前狀態。
 
-PrewarmSources(targetCount) 同步補齊使用中＋閒置的**總容量**，回傳新建數量；不載入素材、不改 MaxVoices、不自動啟動服務。較小目標不縮池，實際需求仍可擴張。TrimIdleSources(minimumCapacity, maxToRemove) 僅刪除閒置來源，保留總容量下限，回傳移出數量；實際 Destroy 於幀末完成。未 Ready 或非正數預算不執行。
+PrewarmSources(targetCount) 同步補齊使用中＋閒置的**總容量**，回傳新建數量；不載入素材、不改 MaxConcurrentSounds、不自動啟動服務。較小目標不縮池，實際需求仍可擴張。TrimIdleSources(minimumCapacity, maxToRemove) 僅刪除閒置來源，保留總容量下限，回傳移出數量；實際 Destroy 於幀末完成。未 Ready 或非正數預算不執行。
 
 池與快取是不同責任；預熱不是預載，也不保證第一次播放端到端延遲。暖播放保留低配置 Usage 快路徑、按需單音效計數索引與弱引用外部 clip ID。
 
@@ -128,7 +127,7 @@ PrewarmSources(targetCount) 同步補齊使用中＋閒置的**總容量**，回
 
 個別暫停、遊戲暫停、AudioListener.pause 與背景暫停分開保存。IgnoreGamePause 略過遊戲／Listener 暫停，但不略過背景或 handle.Pause。Loading 中 Pause 會套用於完成後；暫停中的 Stop 立即完成。播放包絡在暫停時凍結，分類增益仍依非縮放時間淡變。Time.timeScale=0 不等於音訊暫停。
 
-最終增益由玩家 Master／分類音量、暫時 Master／分類增益、PlayOptions.Volume 及播放包絡組成。SetMuted 不停止、不寫入玩家設定；FadeBus 不改保存音量。FadeBus(stopAfter:true) 停止呼叫當時的一批聲音，不把新聲音留在零增益。
+最終增益由玩家 Master／分類音量、暫時 Master／分類增益、PlayOptions.Volume 及播放包絡組成。SetMuted 不停止、不寫入玩家設定；FadeBus 不改保存音量，也不停止聲音。停止一個分類或全部聲音使用 StopBgm／StopSfx／StopVoice／StopAll(seconds)，只影響呼叫當時的一批聲音，之後的新播放不受舊淡出影響。
 
 Mixer 的群組為 BGM／Sound／Voice，exposed parameters 為 masterVolume／bgmVolume／soundVolume／voiceVolume。有效路由與參數由 Mixer 套用玩家設定，缺少時由 AudioSource 補上相應增益；SetMixer(null) 明確不用 Mixer。ValidateMixer／LastMixerIssue 提供診斷。
 
@@ -138,16 +137,16 @@ VolumeChanged 保留原本同步委派的例外傳遞語意，沒有套用上述
 
 ## 啟停與診斷
 
-Controller 的 Awake、重新啟用與 Reload 重接都走 Initialize。依賴由同一宿主管理，沒有全域 Provider 註冊或 Bootstrap 場景搜尋。Shutdown 先標記不可用，再取消／停止、退訂與釋放；其回呼期間不能重新初始化。重新啟用不復活舊 handle。
+Controller 的 Awake、重新啟用與 Reload 重接都走 Initialize。依賴由同一宿主管理，沒有全域 Provider 註冊或 Bootstrap 場景搜尋。Shutdown 先標記不可用，再取消／停止、退訂與釋放；其回呼期間不能重新初始化。重新啟用不復活舊 handle。已有作用中的 Controller 時，後來啟用的 Controller 會被移除；若它的 Clip Provider Source 型別或 Catalog 不同，Editor／Development Build 會警告並指出保留的那個。相同設定的複本（例如每個場景都放 AudioCtrl）安靜移除。
 
-初始化套用設定、Update 切換來源／同步 Catalog，以及播放／預載／準備／快取查詢解析 Catalog 時，都可能間接執行使用者回呼。若回呼關閉、停用、銷毀或重建 Controller，引擎實例身分檢查會中止舊流程：不重新掛回事件、不由舊 Update 推進新引擎，也不自動重試舊請求。解析途中失效的播放回傳 Failed handle，Preload／PrepareClip 回呼 false 一次，快取查詢回傳 false；新生命週期可正常接受後續獨立請求。
+初始化套用設定、Update 切換來源／同步 Catalog，以及播放／準備／快取查詢解析 Catalog 時，都可能間接執行使用者回呼。若回呼關閉、停用、銷毀或重建 Controller，引擎實例身分檢查會中止舊流程：不重新掛回事件、不由舊 Update 推進新引擎，也不自動重試舊請求。解析途中失效的播放回傳 Failed handle，PrepareClip 回呼 false 一次，快取查詢回傳 false；新生命週期可正常接受後續獨立請求。
 
-AudioSettings.OnAudioConfigurationChanged 將已播放／暫停 handle 結束為 Failed，Loading 結束為 Cancelled；清除舊準備與素材快取、停止淡變，重套路由與音量。保留遊戲／背景暫停、靜音及分類增益，不自動續播 BGM。外部被音訊重設失效的 clip 由其擁有者重建。
+AudioSettings.OnAudioConfigurationChanged（例如插拔耳機、切換輸出裝置或 AudioSettings.Reset）時，循環播放（包含 PlayBgm 的音樂）保留 handle，原生聲源停止時從頭重播，暫停中的維持暫停；單次播放與正在 Stop 淡出的循環結束為 Failed，Loading 結束為 Cancelled。之後清除舊準備與素材快取（保留中的循環仍持有原 lease）、停止淡變並把包絡設為 1，重套路由與音量。保留遊戲／背景暫停、靜音及分類增益。以 AudioClip.Create 產生且被重設失效的直接 clip，由其擁有者停止 handle 並重建。
 
 Diagnostics 提供播放、等待、準備、快取與池數量。CreatedSources 是**目前持有**的總來源數，非累計建立次數；縮池後會下降。快取與 CachedOperationCount 只計目前世代，舊播放仍可能持有舊 lease。GetChannelDiagnostics 的 Volume／FadeGain／Muted 是分開的控制值，不代表實際波形或可聽分貝。
 
 Editor Audio checks 提供唯讀場景 Listener、Mixer 與播放控制診斷，不載入素材、不自動修改狀態。Ready 不代表可聽見；實際音檔、Mixer 效果、OS／硬體輸出需另外驗收。
 
-服務未就緒的控制操作直接記錄診斷，不建立無人接收的失敗 handle；播放請求仍回傳完整失敗 handle。Editor／Development Build 限制、Log Playback Failures 開關、去重與 64 筆警告上限不變。
+服務未就緒的控制操作直接記錄「Control call ignored」診斷，不標示分類或 ID，也不建立無人接收的失敗 handle；播放請求仍回傳完整失敗 handle。Editor／Development Build 限制、Log Playback Failures 開關、去重與 64 筆警告上限不變。
 
-目前環境、完整回歸與量測見 [改善計畫 §5.21](../unity-audio-service-improvement-plan.md#521-回呼邊界與素材取得精簡)。本機 Tests／Tools／work 維持 Git 忽略，不隨正式模組發布。
+目前環境、完整回歸與量測見 [改善計畫 §5.24](../unity-audio-service-improvement-plan.md#524-專案審查七項修正)；最近一次 Player 驗證見 §5.21。本機 Tests／Tools／work 維持 Git 忽略，不隨正式模組發布。

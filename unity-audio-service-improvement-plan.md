@@ -1,10 +1,10 @@
 # Unity Audio Service 改善與成熟化計劃
 
-文件日期：2026-10-05
+文件日期：2026-10-14
 
-文件版本：1.28
+文件版本：1.29
 
-狀態：完成設定來源、Tick 責任與 enum 防護整理，本輪聚焦 PlayMode 204／204、Editor／Reload 26／26 通過（見 5.23）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成專案審查七項修正，本輪完整 PlayMode 395／395、EditMode 28／28 通過（見 5.24）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1201,6 +1201,28 @@ XML／log 位於 `work/stage-two-hardening/conditional-cleanup-20261005.*`；輸
 
 33 個專案設定／套件／指定 URP 輸入雜湊未變，Prefab／GUID 未修改；`git diff --check` 通過，最終 architect 審查無阻擋發現。測試／工具／量測只留本機：XML／log 為 `work/stage-two-hardening/flow-cleanup-{final,editor}-20261005.*`，前後 CSV 為 `work/core-performance-20261001/flow-cleanup-{baseline,final}-20261005-gain.csv`；本輪快照、量測摘要、輸入核對及 Unity 生成檔留在 `work/flow-cleanup-20261005/`。程式碼整理為本機提交 `3ea904c`（停止／暫停與固定映射）、`1c985eb`（Debug Menu 設定來源）、`d47c287`（Tick 責任與 enum 防護），驗證文件另列一個提交；未推送。人工聽感、其他平台與 IL2CPP 的驗收界線不變。
 
+### 5.24 專案審查七項修正
+
+記錄日期：2026-10-14。依使用者對專案審查結果「七項直接修」的指示，從 `e9c9bb4`（`improvement/stage-two-core`）開始修改，未提交。
+
+| 項目 | 問題 | 處理 |
+| --- | --- | --- |
+| 1 BGM 轉場取消 | 等待中的 BGM 被取消時，Finish 把目前音樂的包絡直接設為 1：轉場淡出到一半再 `StopBgm(seconds)`、`PlayBgm(...)` 或停止等待 handle，音量會先跳回全音量；若目前音樂已有自己的 Stop 淡出，也會被清掉而不再停止 | 只取消屬於該等待請求的 StartPending 轉場，改成從當下包絡以原淡出速度回到 1；其他轉場保留。後續停止／替換從當下包絡開始 |
+| 2 快取無上限 | 一般播放都會建立普通快取保留，只有呼叫 `ReleaseUnusedClips()` 才釋放；README 基本流程沒有提到 | Controller 訂閱 `SceneManager.sceneLoaded`，Single 載入時自動 ReleaseUnused，對齊 Unity 卸載未使用資產的時機；疊加場景不觸發。SceneAudioSample 移除自行清除全服務快取 |
+| 3 裝置變更 | 插拔耳機、切換輸出裝置或 Reset 後，包含 BGM 在內全部結束為 Failed 且不續播 | 循環播放保留 handle，原生聲源停止時從頭重播並保留暫停；單次播放與 Stop 淡出中的循環維持 Failed，Loading 維持 Cancelled |
+| 4 吞例外 | Store、PrepareClip 與 Fallback 的五處 `catch (Exception)` 未記錄，自訂 Provider 出錯只看到「Clip load failed」 | 改為 `Debug.LogException` 後照原流程失敗 |
+| 5 重複 Controller | 已有 Instance 時，後來的 Controller 被安靜 Destroy | Clip Provider Source 型別或 Catalog 不同時，在 Editor／Development Build 警告並指向保留的 Controller；相同設定（每個場景都放 AudioCtrl）仍安靜移除 |
+| 6 API 一致性 | `controller.Play` 名稱看不出不使用替換槽；`FadeBus(stopAfter)` 與 StopX 重複且 target 非 0 時會淡到該值後硬切；`Preload`／`PrepareClip` 難以選擇；未就緒控制警告顯示「Sfx '' failed」與重複句號 | 改名 `PlayIndependent`；移除 `stopAfter` 並新增 `StopAll`；移除 Preload 保留 PrepareClip；控制警告改為不帶分類的 `Control call ignored`，維持單一去重與開關 |
+| 7 §2.2 準則 | 多個狀態變更寫在同一行；`saveImmediately`／`maxVoices` 與意義不符 | 欄位以 `FormerlySerializedAs` 改名 `autoSave`／`maxConcurrentSounds`，公開屬性改為 `MaxConcurrentSounds`，兩個 Prefab YAML 同步；AudioCallbacks、AudioSettingsPlayerPrefs、Editor 與 Samples 改為一行一個狀態變更 |
+
+**易用性檢查：** 基本播放步驟不變。換場不必再自己清快取，裝置變更後 BGM 不必自行重播；停止全部聲音由三個呼叫變成 `StopAll`。代價是第 2、6、7 項含破壞性 API 變更與行為變更，已在 Migration.md 列出替換方式，編譯錯誤會直接指出需要修改的位置。移除 Preload 後，不再有「只保留資產、不先載入音訊資料」的入口；需要時以匯入設定控制。
+
+**維護性檢查：** 移除 `stopAfter` 後 StopCategory／StopPlayback 不再傳遞 target，FadeBus 不再需要回呼範圍；移除 Preload 與其引擎轉送；控制失敗與播放失敗分開記錄；AudioControllerEditor 合併三處相同的重新檢查。新增 SceneManager 訂閱與重設後重播兩段邏輯，前者與既有 AudioSettings 訂閱共用 Attach／Detach。暫不處理：PreferAvailable 的主來源同步拋錯時不會再嘗試備援（行為未變，僅新增記錄）；播放完成仍依 `!isPlaying` 判斷，未準備的 Load In Background 素材是否會被誤判未驗證。
+
+**驗證：** Unity 6000.6.3f1 本機修改前基準 PlayMode **380／380**；修改後完整 PlayMode **395／395**、EditMode **28／28** 通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤。新增 `ReviewFixesRegressionTests` 15 項（四種 BGM 取消情境、Single／Additive 與真實場景載入、轉場中重設、同步及 Fallback 例外記錄、兩種重複 Controller、StopAll、FadeBus 不停止、PlayIndependent 與控制警告文字）及 EditMode `LegacyFieldNameTests`（以舊欄位名稱匯入 Prefab）。既有測試的機械式改名之外，依新行為調整 9 項：裝置重設 3 項（含真實 `AudioSettings.Reset`：循環音重播且 `isPlaying`，單次播放為 Failed）、範例離場快取 2 項、例外記錄 3 項，以及原本斷言取消後立即回到音量 1 的 `Bgm_CancellingPendingTransitionRestoresCurrentGain`；該斷言在修改前通過，正是第 1 項跳音的直接證據。`CallbackBoundaryMeasurements.BatchSnapshots` 的重設量測改用單次播放，仍量測結束 handle 的路徑，與前輪 CSV 不完全可比。
+
+XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,final,editor}-20261014.*`；run1 為測試改名遺漏造成的編譯失敗，run2 為依新行為待調整的 5 項失敗，均保留。本輪未重跑 macOS Player、Resources-only 獨立建置及效能量測；人工聽感、其他平台與 IL2CPP 的驗收界線不變。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1401,6 +1423,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成通知隔離、同步／取消路徑、PrepareClip 責任拆分及共用 Mixer 定義；326 項 PlayMode、26 項 Editor、Player 兩模式各 250 項及獨立 Resources-only 驗證通過，見 §5.20。
 - [x] 完成停止相同結果合併、暫停狀態切換及固定映射 switch 整理；本輪七組聚焦 PlayMode 154／154 通過，見 §5.22。
 - [x] 完成 Debug Menu 設定來源修正、Tick 責任拆分與 enum 防護集中；聚焦 PlayMode 204／204、Editor／Reload 26／26 通過，CPU 取捨見 §5.23。
+- [x] 完成專案審查七項修正（BGM 轉場取消、換場快取、裝置變更、例外記錄、重複 Controller、API 一致性、§2.2 格式與欄位名稱）；PlayMode 395／395、EditMode 28／28 通過，破壞性變更見 Migration.md 與 §5.24。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1447,3 +1470,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.25 | 2026-10-01 | 統一 Changed／Completed 通知隔離、減少同步與取消交付配置、拆出 PrepareClip 並共用 Mixer 定義；326 項 PlayMode、26 項 Editor、Player 兩模式各 250 項及獨立 Resources-only 通過；含測試發現修正、CPU 取捨及適用邊界，見 §5.20 |
 | 1.27 | 2026-10-05 | 合併停止分支、以一次暫停需求判斷控制狀態切換、固定映射改用 switch；七組聚焦 PlayMode 154／154 通過，保持 API／序列化及既有生命週期契約，見 §5.22 |
 | 1.28 | 2026-10-05 | 修正 Debug Menu 過時設定來源、拆出 Tick 淡變／轉場責任、集中既有 enum 防護；聚焦 PlayMode 204／204、Editor／Reload 26／26 通過，記錄零管理配置測點與部分 CPU 增加，見 §5.23 |
+| 1.29 | 2026-10-14 | 依專案審查修正七項：BGM 轉場取消不跳音、Single 換場自動釋放普通快取、裝置變更保留並重播循環、記錄 Provider 例外、提示設定不同的重複 Controller、`PlayIndependent`／`StopAll` 並移除 Preload 與 stopAfter、欄位改名與一行一個狀態變更；PlayMode 395／395、EditMode 28／28 通過，見 §5.24 |

@@ -4,6 +4,27 @@
 
 後續 §5.20 的通知／載入／準備整理不再移除 API，也不改 Prefab 或序列化欄位。唯一通知行為補強是 `AudioCatalog.Changed`、`FallbackAudioClipProvider.Changed` 及 Completed 晚訂閱的多播委派：某個訂閱者拋錯仍會記錄，後續訂閱者照常收到通知。不要依賴拋例外中斷這些事件；lease 交付與 VolumeChanged 保留各自原有契約。
 
+## 2026-10-14 審查修正
+
+依專案審查修正七項。下表 API 變更都會在編譯時直接報錯，依表格替換即可；Prefab 與場景的序列化欄位會自動遷移。
+
+| 舊入口／行為 | 新入口／處理方式 |
+| --- | --- |
+| `controller.Play(category, idOrClip, options)` | `controller.PlayIndependent(category, idOrClip, options)`，行為不變：不使用替換槽，BGM 分類只在 `Loop` 時循環 |
+| `controller.Preload(category, id, group, completed)` | `controller.PrepareClip(category, id, group, completed)`，參數相同；完成時音訊資料也已載入 |
+| `FadeBus(channel, 0, seconds, stopAfter: true)` | 單一分類用 `StopBgm`／`StopSfx`／`StopVoice(seconds)`；Master 用新的 `AudioService.StopAll(seconds)` |
+| `FadeBus(channel, target, seconds, stopAfter: true)`，target 大於 0 | 舊行為是淡到 target 後硬切，沒有直接替代；先決定要「淡出並停止」還是「調整分類增益」 |
+| `controller.MaxVoices` | `controller.MaxConcurrentSounds` |
+| 序列化欄位 `maxVoices`／`saveImmediately` | 改名為 `maxConcurrentSounds`／`autoSave`，以 `FormerlySerializedAs` 讀取舊 Prefab 與場景；以 SerializedObject 或反射讀取舊名稱的自訂工具需改用新名稱 |
+
+行為變更：
+
+- **換場快取**：Single 模式載入場景時，服務自動釋放普通播放快取；仍在播放的聲音與 PrepareClip 群組不受影響。若依賴換場後快取仍在，改由長駐物件用 PrepareClip 群組持有。SceneAudioSample 不再自行呼叫 `ReleaseUnusedClips()`。
+- **音訊裝置變更**：循環播放（包含 `PlayBgm` 的音樂）保留 handle 並從頭重播，不再收到 Failed；原本在 Completed 裡重播 BGM 的程式可以移除。單次播放仍結束為 Failed。
+- **取消 BGM 轉場**：目前音樂從當下音量以原淡出速度回升，不再瞬間回到全音量；之後的停止或替換也從當下音量開始。
+- **Provider 例外**：Provider 拋出的例外現在以 `Debug.LogException` 記錄後視為取得失敗。刻意拋錯的測試需加上 `LogAssert.Expect`。
+- **診斷文字**：未就緒時的控制操作警告改為 `Control call ignored: ...`，不再顯示 `Sfx ''`；依舊文字過濾記錄的工具需更新。設定不同的重複 AudioController 被移除時會警告。
+
 ## 播放與控制
 
 | 舊入口／行為 | 新入口／處理方式 |
@@ -23,7 +44,7 @@
 
 SFX 循環不再自動替換上一個循環。需要風聲等單一擁有者時，由該物件保存 handle，在換聲音時停止舊 handle。對話只有一個替換槽；背景人聲改用 `Overlap`。
 
-`AudioController.Play(category, idOrClip, options)` 保留為明確的獨立播放入口，不使用 BGM／對話替換槽。日常程式仍優先使用 `AudioService`。
+`AudioController.Play(category, idOrClip, options)` 保留為明確的獨立播放入口，不使用 BGM／對話替換槽；2026-10-14 起改名為 `PlayIndependent`。日常程式仍優先使用 `AudioService`。
 
 ## 場景與 Prefab
 
