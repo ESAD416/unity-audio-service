@@ -132,15 +132,19 @@ namespace Controller.Audio
 
         public bool Validate()
         {
-            LastIssue = null;
+            LastIssue = FindIssue();
+            return LastIssue == null;
+        }
+
+        // Report the first problem; the Editor audio checks list every missing item.
+        private string FindIssue()
+        {
             if (mixer == null)
-                return true;
+                return null;
             for (int i = 0; i < parameters.Length; i++)
                 if (!mixer.GetFloat(AudioMixerLayout.Parameter(i), out _))
-                    LastIssue = "Missing exposed parameter: " + AudioMixerLayout.Parameter(i);
-            if (groups[0] == null || groups[1] == null || groups[2] == null)
-                LastIssue = "Missing BGM, Sound or Voice mixer group";
-            return LastIssue == null;
+                    return "Missing exposed parameter: " + AudioMixerLayout.Parameter(i);
+            return Array.Exists(groups, group => group == null) ? "Missing BGM, Sound or Voice mixer group" : null;
         }
 
         public void ConfigureSource(AudioSource source, AudioCategory category)

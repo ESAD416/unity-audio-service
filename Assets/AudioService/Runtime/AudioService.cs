@@ -40,12 +40,12 @@ namespace Controller.Audio
         public static AudioHandle PlayVoice(AudioClip clip, PlayOptions options = null, VoicePlaybackMode mode = VoicePlaybackMode.Replace)
             => Voice(default, clip, options, mode);
 
-        private static AudioHandle Voice(AudioId id, AudioClip clip, PlayOptions options, VoicePlaybackMode mode)
+        private static AudioHandle Voice(AudioId id, AudioClip clip, PlayOptions options, VoicePlaybackMode mode) => mode switch
         {
-            if (mode != VoicePlaybackMode.Replace && mode != VoicePlaybackMode.Overlap)
-                return Failed(AudioCategory.Voice, id, "Invalid VoicePlaybackMode. Use Replace or Overlap");
-            return Request(AudioCategory.Voice, id, clip, options, mode == VoicePlaybackMode.Replace ? PlaybackSlot.Dialogue : PlaybackSlot.None);
-        }
+            VoicePlaybackMode.Replace => Request(AudioCategory.Voice, id, clip, options, PlaybackSlot.Dialogue),
+            VoicePlaybackMode.Overlap => Request(AudioCategory.Voice, id, clip, options, PlaybackSlot.None),
+            _ => Failed(AudioCategory.Voice, id, "Invalid VoicePlaybackMode. Use Replace or Overlap")
+        };
         private static AudioHandle Request(AudioCategory category, AudioId id, AudioClip clip, PlayOptions options, PlaybackSlot slot)
         {
             var controller = AudioController.Instance;

@@ -163,9 +163,9 @@ namespace Controller.Audio
 
     public static class AudioValues
     {
-        public static float Unit(float value, float fallback = 0f) => float.IsNaN(value) || float.IsInfinity(value) ? fallback : Mathf.Clamp01(value);
-        public static float Seconds(float value) => float.IsNaN(value) || float.IsInfinity(value) ? 0f : Mathf.Max(0f, value);
-        public static float Pitch(float value) => float.IsNaN(value) || float.IsInfinity(value) ? 1f : Mathf.Clamp(value, .01f, 3f);
+        public static float Unit(float value, float fallback = 0f) => float.IsFinite(value) ? Mathf.Clamp01(value) : fallback;
+        public static float Seconds(float value) => float.IsFinite(value) ? Mathf.Max(0f, value) : 0f;
+        public static float Pitch(float value) => float.IsFinite(value) ? Mathf.Clamp(value, .01f, 3f) : 1f;
         public static float Decibels(float value) => Mathf.Max(-80f, 20f * Mathf.Log10(Mathf.Max(.0001f, Unit(value))));
         internal static bool IsValidChannel(AudioChannel channel)
             => channel is AudioChannel.Master or AudioChannel.Bgm or AudioChannel.Sfx or AudioChannel.Voice;
@@ -192,7 +192,8 @@ namespace Controller.Audio
         public readonly int Playing, Paused, Loading, PooledSources, CreatedSources, CachedClips, ClipUsers, PendingLoads, PreparingClips;
         public readonly string LastFailure;
         public readonly bool GamePaused, BackgroundPaused;
-        internal AudioDiagnostics(int playing, int paused, int loading, int pooled, int created, int cached, int users, int pending, string failure, int preparing = 0, bool gamePaused = false, bool backgroundPaused = false)
+        internal AudioDiagnostics(int playing, int paused, int loading, int pooled, int created, int cached, int users, int pending,
+            int preparing, string failure, bool gamePaused, bool backgroundPaused)
         {
             Playing = playing;
             Paused = paused;

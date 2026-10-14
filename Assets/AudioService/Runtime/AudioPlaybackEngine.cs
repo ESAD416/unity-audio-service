@@ -970,7 +970,8 @@ namespace Controller.Audio
                 }
 
                 store.GetCounts(out int cached, out int users, out int pending);
-                return new AudioDiagnostics(playing, paused, loading, pool.Count, emitters.Count, cached, users, pending, LastFailure, preparations.Count, gamePaused, backgroundPaused);
+                return new AudioDiagnostics(playing, paused, loading, pool.Count, emitters.Count, cached, users, pending,
+                    preparations.Count, LastFailure, gamePaused, backgroundPaused);
             }
         }
 
