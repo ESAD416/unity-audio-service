@@ -96,6 +96,7 @@ namespace Controller.Audio
                 return;
             if (Instance != null && Instance != this)
             {
+                ReportDiscardedDuplicate(Instance);
                 Destroy(gameObject);
                 return;
             }
@@ -131,6 +132,18 @@ namespace Controller.Audio
                 return;
             AttachProviderNotifications();
             AttachUnityEvents();
+        }
+
+        // Copies of the same AudioCtrl in every scene are a common setup and are removed silently.
+        // A different provider or catalog would be lost without notice, so name the active one.
+        private void ReportDiscardedDuplicate(AudioController active)
+        {
+            if (!Application.isEditor && !Debug.isDebugBuild)
+                return;
+            static Type SourceType(MonoBehaviour source) => source != null ? source.GetType() : null;
+            if (SourceType(clipProviderSource) == SourceType(active.clipProviderSource) && catalog == active.catalog)
+                return;
+            Debug.LogWarning($"[AudioService] Removed duplicate AudioController '{name}'. '{active.name}' is already the active service and keeps its own clip provider and catalog. Keep one AudioCtrl, or configure the active one with SetClipProvider / Catalog.", active);
         }
 
         public void Shutdown()
