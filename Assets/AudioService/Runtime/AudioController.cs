@@ -326,13 +326,10 @@ namespace Controller.Audio
 
         internal AudioHandle Request(AudioCategory category, AudioId id, AudioClip clip, PlayOptions options, PlaybackSlot slot)
         {
-            if (clip != null)
-            {
-                if (ReadyEngine is { } ready)
-                    return ready.Play(category, null, clip, options, slot, id);
-            }
-            else if (TryResolve(category, id, out var current, out var address))
-                return current.Play(category, address, null, options, slot, id);
+            if (clip != null && ReadyEngine is { } ready)
+                return ready.Play(category, clip, options, slot);
+            if (clip == null && TryResolve(category, id, out var current, out var address))
+                return current.Play(address, options, slot);
 
             ReportPlaybackFailure(category, id, AudioHandle.NotReadyReason);
             return AudioHandle.Failed(category, id, AudioHandle.NotReadyReason);

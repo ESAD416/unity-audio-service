@@ -240,50 +240,78 @@ namespace Controller.Audio
             return sources.Trim(Mathf.Max(0, minimumCapacity), maxToRemove);
         }
 
-        public AudioHandle Play(AudioCategory category, ResolvedAudioClip? address, AudioClip direct, PlayOptions supplied, PlaybackSlot slot = PlaybackSlot.None, AudioId id = default)
+        /// <summary>Play an externally owned clip. The service never loads or unloads it.</summary>
+        public AudioHandle Play(AudioCategory category, AudioClip clip, PlayOptions options, PlaybackSlot slot)
         {
             using var mutation = callbacks.Begin();
-            string key = address?.Id ?? id.Value;
-            var handle = new AudioHandle
-            {
-                Id = ++nextId,
-                AudioId = direct != null ? Identify(direct) : new AudioId(key),
-                Category = category,
-                Owner = this
-            };
-            string invalid = InvalidRequest(category, key, direct);
+            var handle = NewHandle(category, Identify(clip));
+            var playback = Admit(handle, options, slot, 0);
+            if (playback != null)
+                Loaded(playback, ClipHold.External(clip));
+            return handle;
+        }
+
+        /// <summary>Play the clip at a resolved address. A resident clip starts at once; any other loads first.</summary>
+        public AudioHandle Play(ResolvedAudioClip address, PlayOptions options, PlaybackSlot slot)
+        {
+            using var mutation = callbacks.Begin();
+            var handle = NewHandle(address.Category, new AudioId(address.Id));
+            var playback = Admit(handle, options, slot, address.MaxInstances);
+            if (playback == null)
+                return handle;
+            // Loading reserves admission, not a native AudioSource.
+            if (store.TryAcquireResident(address.Category, address.Id, out var usage))
+                Loaded(playback, ClipHold.Of(usage));
+            else
+                RequestClip(playback, address);
+            return handle;
+        }
+
+        private AudioHandle NewHandle(AudioCategory category, AudioId id) => new AudioHandle
+        {
+            Id = ++nextId,
+            AudioId = id,
+            Category = category,
+            Owner = this
+        };
+
+        // Validate and admit a request. Returns the accepted playback, already active and
+        // holding its slot, or null after finishing the handle as failed or rejected.
+        private Playback Admit(AudioHandle handle, PlayOptions supplied, PlaybackSlot slot, int catalogLimit)
+        {
+            string invalid = InvalidRequest(handle);
             if (invalid != null)
             {
                 Reject(handle, AudioCompletion.Failed, invalid);
-                return handle;
+                return null;
             }
 
+            // PlayOptions.MaxInstances wins; otherwise the catalog entry's limit applies.
             int maxInstances = Mathf.Max(0, supplied?.MaxInstances ?? 0);
-            if (maxInstances == 0 && address.HasValue)
-                maxInstances = Mathf.Max(0, address.Value.MaxInstances);
+            if (maxInstances == 0)
+                maxInstances = Mathf.Max(0, catalogLimit);
             string rejected = admission.Plan(handle, slot, maxInstances, supplied?.ConcurrencyPolicy ?? AudioConcurrencyPolicy.RejectNew, out var victims);
             if (rejected != null)
             {
                 Reject(handle, AudioCompletion.Rejected, rejected);
-                return handle;
+                return null;
             }
 
-            StartAccepted(handle, key, address, direct, supplied, slot, victims);
-            return handle;
+            return StartAccepted(handle, supplied, slot, victims);
         }
 
-        private string InvalidRequest(AudioCategory category, string key, AudioClip direct)
+        private string InvalidRequest(AudioHandle handle)
         {
             if (disposed || !host.Ready)
                 return AudioHandle.NotReadyReason;
-            if (!AudioValues.IsValidCategory(category))
+            if (!AudioValues.IsValidCategory(handle.Category))
                 return "Invalid AudioCategory. Use Bgm, Sfx or Voice";
-            if (direct == null && string.IsNullOrWhiteSpace(key))
+            if (string.IsNullOrWhiteSpace(handle.AudioId.Value))
                 return "Empty audio ID and no AudioClip. Pass a non-empty ID or an existing clip";
             return null;
         }
 
-        private void StartAccepted(AudioHandle handle, string key, ResolvedAudioClip? address, AudioClip direct, PlayOptions supplied, PlaybackSlot slot, Playback[] victims)
+        private Playback StartAccepted(AudioHandle handle, PlayOptions supplied, PlaybackSlot slot, Playback[] victims)
         {
             // Snapshot before eviction can release a provider lease or invoke external code.
             var options = new PlaybackOptions(supplied, slot == PlaybackSlot.Bgm);
@@ -305,13 +333,7 @@ namespace Controller.Audio
             }
 
             AddActive(playback);
-            // Loading reserves admission, not a native AudioSource.
-            if (direct != null)
-                Loaded(playback, ClipHold.External(direct));
-            else if (store.TryAcquireResident(handle.Category, key, out var usage))
-                Loaded(playback, ClipHold.Of(usage));
-            else
-                RequestClip(playback, address ?? new ResolvedAudioClip(key, handle.Category));
+            return playback;
         }
 
         private void RequestClip(Playback playback, ResolvedAudioClip address)
