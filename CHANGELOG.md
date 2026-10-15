@@ -1,5 +1,13 @@
 # 變更紀錄
 
+## Unreleased - 播放槽方法化、Inspector 拆段與零碎整理（2026-10-15）
+
+- 引擎的播放槽改由 `SlotState.Reserve`／`Promote`／`Leave` 變更，其他地方只能讀取目前與等待中的請求，`LeaveSlot` 移除；`disposed || !host.Ready` 的三處重複改為 `Usable`。
+- `AudioControllerEditor.OnInspectorGUI` 由 46 行拆成設定、檢查與 Play Mode 狀態三段，畫面與繪製順序不變。
+- 零碎整理：`AudioValues.Alive` 改用模式比對；Fallback 拆開一行兩個狀態變更，以 `PrefersAvailable` 取代三處政策判斷，快取查詢與取得的寫法一致；Store 的「取出 callback 再清空」改為 `Waiter.Take()`；Addressables 夾在 if 與 else 之間的註解移到 if 上方；AudioImportTools 的選單路徑與 30 秒、8 MiB 門檻改為具名常數；Resources Provider 以 `PathOf` 取代三處 key 與路徑判斷。
+- 檔案組織：`AudioCategory`、`AudioChannel` 移到 `AudioPlayback.cs`，與其他公開列舉放在一起；`IAudioSettingsMaintenance` 移到 `Interface/IAudioSettingsHandler.cs`。命名空間與組件不變，沒有新增檔案。
+- 公開 API、Prefab、序列化欄位、行為與診斷文字不變。本機 PlayMode 402／402、EditMode 29／29 通過，配置事件與上一輪相同；本輪未重跑 macOS Player。詳見改善計畫 §5.31。
+
 ## Unreleased - 移除過時的播放參數與重複規則（2026-10-15）
 
 - 引擎 `Play` 拆成「播放外部 clip」與「播放已解析位址」兩個多載，移除從未讀取的 `id` 參數與兩段走不到的 fallback；`StartAccepted` 由 7 個參數減為 4 個，Controller 的 `Request` 改為兩個並列的提前 return。`id` 是 `b996b04` 為了延後建立 class 型別的預設位址而加入，`80f169f` 改用 struct 的 `ResolvedAudioClip` 後就不再需要。

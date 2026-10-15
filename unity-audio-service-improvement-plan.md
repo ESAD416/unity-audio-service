@@ -2,9 +2,9 @@
 
 文件日期：2026-10-15
 
-文件版本：1.35
+文件版本：1.36
 
-狀態：完成過時播放參數、Finish 旗標、SetVolume 與開發版記錄規則整理，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.30）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成播放槽方法化、Inspector 拆段、零碎整理與檔案組織，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.31）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1326,6 +1326,25 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；本機測試未修改，也未新增測試。本機量測的 20 組配置事件中位數與 §5.29 相同。XML／log 位於 `work/stage-two-hardening/review4-{run1,editor-run1}-20261015.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
 
+### 5.31 播放槽方法化、Inspector 拆段與零碎整理
+
+記錄日期：2026-10-15。依使用者指定，完成第四次程式碼檢視的其餘四項（第 5～8 項），從 `2b5f0b6` 開始修改，未提交。公開 API、Prefab、序列化欄位、行為與診斷文字不變。
+
+| 項目 | 處理 |
+| --- | --- |
+| 5 播放槽 | `SlotState` 的 `Current`／`Pending` 改為唯讀屬性，只能經由 `Reserve`、`Promote`、`Leave` 變更；引擎改為一行呼叫，移除 `LeaveSlot` |
+| 6 Inspector | `AudioControllerEditor.OnInspectorGUI` 由 46 行拆出 `DrawSettings` 與 `DrawPlayModeState`，加上原有的 `DrawChecks` 共三段，繪製順序不變 |
+| 7 零碎 | `AudioValues.Alive` 改用模式比對；Fallback 拆開 `main = backup = null`，新增 `PrefersAvailable` 取代三處政策判斷，快取查詢比照取得改用 `TryGetCached`；Store 新增 `Waiter.Take()` 取代三處「取出再清空」；Addressables 夾在 if 與 else 之間的註解移到 if 上方；AudioImportTools 的三個選單路徑與 30 秒、8 MiB 門檻改為具名常數；Resources Provider 以 `PathOf` 取代三處 key 與路徑判斷；引擎三處 `disposed \|\| !host.Ready` 改為 `Usable` |
+| 8 檔案組織 | `AudioCategory`、`AudioChannel` 移到 `AudioPlayback.cs`，與其他公開列舉放在一起；`IAudioSettingsMaintenance` 移到 `Interface/IAudioSettingsHandler.cs`。命名空間、組件與 GUID 不變，沒有新增檔案 |
+
+**評估後不做：** 兩個 Inspector 共用 `m_Script` 欄位與 `Field` 小工具。Editor 類別是 public，共用的基底類別也必須 public，等於多一個公開型別；改用靜態工具又不會縮短呼叫點，為兩行重複不值得。Addressables 的「取出 callback 再清空」只有一處，不另加方法。
+
+**易用性檢查：** 使用流程、公開 API、Inspector 畫面與診斷文字不變，屬純內部整理。
+
+**維護性檢查：** 播放槽的兩個角色只能經由三個具名操作改變；Inspector 主方法一眼可見三段；Fallback 的兩個同步查詢寫法對稱；Resources 的 key 規則只剩一處；公開列舉集中在同一檔案，`Interface/` 只放介面與 lease。
+
+**驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；本機測試未修改，也未新增測試。本機量測的 20 組配置事件中位數與 §5.30 相同。XML／log 位於 `work/stage-two-hardening/review4b-{run1,editor-run1}-20261015.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1533,6 +1552,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成 Tween 具名工廠、StopResult、內建型別與 tuple、長 lambda 與 Fallback 重複整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.28。
 - [x] 完成 DebugMenu 守衛與命名空間、QuickStart 的 OwnedSound、SaveCount 改為 internal、Addressables 註解與 GetIssues 拆分；PlayMode 402／402、EditMode 29／29 通過，見 §5.29。
 - [x] 完成引擎 Play 來源參數、Finish 旗標、SetVolume 拆分與開發版記錄規則集中；PlayMode 402／402、EditMode 29／29 通過，見 §5.30。
+- [x] 完成播放槽方法化、Inspector 拆段、零碎語法與檔案組織整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.31。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1586,3 +1606,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.33 | 2026-10-15 | Tween 改用具名工廠與 Is；統一停止結果規則；改用 StrongBox 與 tuple；抽出準備佇列與失敗提示的長邏輯並合併 Fallback 重複；PlayMode 402／402、EditMode 29／29 通過，見 §5.28 |
 | 1.34 | 2026-10-15 | DebugMenu 改走 AudioService 並移至 Samples 命名空間；QuickStart 抽出 OwnedSound；SaveCount 改為 internal；GetIssues 拆成場景與 Play Mode 檢查；PlayMode 402／402、EditMode 29／29 通過，見 §5.29 |
 | 1.35 | 2026-10-15 | 引擎 Play 拆成 clip／位址兩個多載並移除過時的 id；Finish 旗標拆成 Retire；SetVolume 抽出 StoreVolume；開發版記錄規則集中；PlayMode 402／402、EditMode 29／29 通過，見 §5.30 |
+| 1.36 | 2026-10-15 | SlotState 改由具名操作變更；Inspector 拆段；Alive、Fallback、Store、Addressables、AudioImportTools、Resources 與引擎的零碎整理；公開列舉與介面歸位；PlayMode 402／402、EditMode 29／29 通過，見 §5.31 |
