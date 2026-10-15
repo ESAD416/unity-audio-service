@@ -1,5 +1,12 @@
 # 變更紀錄
 
+## Unreleased - 冗長條件收尾（2026-10-15）
+
+- Controller 以 `RevisionOf` 統一「沒有 Catalog 時版本視為 0」，`SyncCatalog` 的條件不再需要括號包住的子句。**行為差異：** 已綁定的 Catalog 在執行中被 Destroy 時，下一次更新會刷新一次查找，與把 Catalog 設為 null 的處理一致；原本不刷新，快取會留著依舊對應找到的素材。
+- Fallback 的循環檢查改用 `is not` 提前 return，最後只剩往主、備兩邊找；引擎 `Start` 的兩個提前 return 共用 `CanStart`。
+- SceneAudioSample 與 DebugMenu 把「延遲完成是否已過時」命名為 `IsCurrent()`；Editor 檢查的聽者條件命名為 `IsActiveInLoadedScenes`。
+- 公開 API、Prefab、序列化欄位與診斷文字不變。本機 PlayMode 403／403（新增 1 項 Catalog 銷毀測試）、EditMode 29／29 通過，配置事件與上一輪相同；本輪未重跑 macOS Player。詳見改善計畫 §5.32。
+
 ## Unreleased - 播放槽方法化、Inspector 拆段與零碎整理（2026-10-15）
 
 - 引擎的播放槽改由 `SlotState.Reserve`／`Promote`／`Leave` 變更，其他地方只能讀取目前與等待中的請求，`LeaveSlot` 移除；`disposed || !host.Ready` 的三處重複改為 `Usable`。

@@ -2,9 +2,9 @@
 
 文件日期：2026-10-15
 
-文件版本：1.36
+文件版本：1.37
 
-狀態：完成播放槽方法化、Inspector 拆段、零碎整理與檔案組織，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.31）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成冗長條件收尾，並修正已綁定 Catalog 被銷毀時不刷新的情況，本輪完整 PlayMode 403／403、EditMode 29／29 通過（見 5.32）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1345,6 +1345,28 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；本機測試未修改，也未新增測試。本機量測的 20 組配置事件中位數與 §5.30 相同。XML／log 位於 `work/stage-two-hardening/review4b-{run1,editor-run1}-20261015.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
 
+### 5.32 冗長條件收尾
+
+記錄日期：2026-10-15。依使用者指定，完成「冗長條件」專題檢視列出的五項，從 `2df754e` 開始修改，未提交。檢視時正式程式、Editor、Addressables 與範例共有 32 個三個子句以上的條件，其中 13 個已是具名判斷，其餘多為簡短的提前 return；沒有巢狀三元運算或整組取反。公開 API、Prefab、序列化欄位與診斷文字不變。
+
+| 項目 | 處理 |
+| --- | --- |
+| 1 Catalog 同步 | 新增 `RevisionOf(catalog)`，`BindCatalog` 與 `SyncCatalog` 共用「沒有 Catalog 時版本為 0」；條件改為 `boundCatalog != catalog \|\| catalogRevision != RevisionOf(catalog)` |
+| 2 循環檢查 | `Fallback.Contains` 一行四個子句改為 `is not` 提前 return，最後一行只剩往主、備兩邊找，結果不變 |
+| 3 Start 守衛 | 引擎 `Start` 的兩個提前 return 共用 `CanStart`；結束目前的聲音時不執行外部程式碼，第二處多查的條件不改變結果 |
+| 4 範例 | SceneAudioSample 與 DebugMenu 的延遲完成檢查命名為區域函式 `IsCurrent()`；SceneAudioSample 的第二道檢查補上註解 |
+| 5 Editor 聽者 | `AudioSetupDiagnostics` 的聽者條件命名為 `IsActiveInLoadedScenes`，對應提示文字 |
+
+**行為差異（第 1 項）：** 檢視時原說結果完全相同，實作時發現一個例外：已綁定的 Catalog 在執行中被 Destroy 時，舊寫法因 `catalog != null` 為否而不刷新，但 `TryResolve` 已把它當成沒有 Catalog，快取仍留著依舊對應找到的素材。新寫法在下一次更新刷新一次查找，與把 Catalog 設為 null 的處理一致；之後兩邊版本都是 0，不會重複刷新。新增本機測試 `ConditionCleanupTests.DestroyingTheBoundCatalogRefreshesLookupsOnce` 鎖住此行為；把 Controller 暫時換回舊寫法執行時，此測試失敗（載入中的請求結果為 None，未被刷新取消），換回新寫法後通過，對照結果位於 `work/stage-two-hardening/conditions-oldcatalog-20261015.*`。
+
+**不做：** AudioControllerEditor 以 `GUILayout.Button` 結尾的條件是 IMGUI 慣用寫法，只有可選取時才畫按鈕；PlayerPrefs 的自動存檔條件、引擎 Tick 與轉場、Store 取得與 Addressables 移除別名的條件都已清楚；Diagnostics 的計數改成 switch 不會更短。
+
+**易用性檢查：** 使用流程與公開 API 不變。範例的過時檢查有了名字，使用者照抄時更容易看出用途。
+
+**維護性檢查：** 三個子句以上的條件現在只剩提前 return 與 IMGUI 慣用寫法，「冗長條件」專題到此收尾。
+
+**驗證：** Unity 6000.6.3f1 本機完整 PlayMode **403／403**（含新增 1 項）、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；既有測試未修改。本機量測的 20 組配置事件中位數與 §5.31 相同。XML／log 位於 `work/stage-two-hardening/conditions-{run1,editor-run1}-20261015.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1553,6 +1575,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成 DebugMenu 守衛與命名空間、QuickStart 的 OwnedSound、SaveCount 改為 internal、Addressables 註解與 GetIssues 拆分；PlayMode 402／402、EditMode 29／29 通過，見 §5.29。
 - [x] 完成引擎 Play 來源參數、Finish 旗標、SetVolume 拆分與開發版記錄規則集中；PlayMode 402／402、EditMode 29／29 通過，見 §5.30。
 - [x] 完成播放槽方法化、Inspector 拆段、零碎語法與檔案組織整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.31。
+- [x] 完成冗長條件收尾：Catalog 版本、循環檢查、Start 守衛、範例與 Editor 條件命名；PlayMode 403／403、EditMode 29／29 通過，見 §5.32。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1607,3 +1630,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.34 | 2026-10-15 | DebugMenu 改走 AudioService 並移至 Samples 命名空間；QuickStart 抽出 OwnedSound；SaveCount 改為 internal；GetIssues 拆成場景與 Play Mode 檢查；PlayMode 402／402、EditMode 29／29 通過，見 §5.29 |
 | 1.35 | 2026-10-15 | 引擎 Play 拆成 clip／位址兩個多載並移除過時的 id；Finish 旗標拆成 Retire；SetVolume 抽出 StoreVolume；開發版記錄規則集中；PlayMode 402／402、EditMode 29／29 通過，見 §5.30 |
 | 1.36 | 2026-10-15 | SlotState 改由具名操作變更；Inspector 拆段；Alive、Fallback、Store、Addressables、AudioImportTools、Resources 與引擎的零碎整理；公開列舉與介面歸位；PlayMode 402／402、EditMode 29／29 通過，見 §5.31 |
+| 1.37 | 2026-10-15 | 冗長條件收尾：RevisionOf、Contains 提前 return、CanStart、範例 IsCurrent、Editor 聽者判斷；已綁定 Catalog 被銷毀時刷新一次；PlayMode 403／403、EditMode 29／29 通過，見 §5.32 |
