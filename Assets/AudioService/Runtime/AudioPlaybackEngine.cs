@@ -399,8 +399,10 @@ namespace Controller.Audio
             if (disposed || playback.Handle.IsFinished || playback.Emitter.Pending != playback)
                 return;
             var emitter = playback.Emitter;
+            // This playback is the one waiting for the source, so retire the current sound
+            // without starting its waiter again.
             if (emitter.Current != null)
-                Finish(emitter.Current, AudioCompletion.Stopped, resumePending: false);
+                Retire(emitter.Current, AudioCompletion.Stopped);
             if (playback.Handle.IsFinished || disposed)
                 return;
             var state = GetSlot(playback.Slot);
@@ -429,10 +431,19 @@ namespace Controller.Audio
                 emitter.Transition = Tween.Fade(0, 1, playback.Options.FadeInSeconds);
         }
 
-        private void Finish(Playback playback, AudioCompletion result, string reason = null, bool resumePending = true)
+        private void Finish(Playback playback, AudioCompletion result, string reason = null)
+        {
+            var waiting = Retire(playback, result, reason);
+            if (waiting != null && !disposed)
+                Start(waiting);
+        }
+
+        // End the playback and release what it holds. Returns the request that was waiting
+        // for its source; Finish starts that request, Start retires a sound to take its source.
+        private Playback Retire(Playback playback, AudioCompletion result, string reason = null)
         {
             if (playback.Handle.IsFinished)
-                return;
+                return null;
             // Commit every state change before releases and notifications can reenter.
             RemoveActive(playback);
             var cancel = playback.CancelLoad;
@@ -448,8 +459,7 @@ namespace Controller.Audio
             // are queued by the store until this entire engine mutation commits.
             AudioCallbacks.Invoke(cancel);
             hold.Release();
-            if (resumePending && waiting != null && !disposed)
-                Start(waiting);
+            return waiting;
         }
 
         private void LeaveSlot(Playback playback)
