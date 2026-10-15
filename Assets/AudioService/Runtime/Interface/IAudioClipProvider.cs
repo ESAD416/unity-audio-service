@@ -3,13 +3,6 @@ using UnityEngine;
 
 namespace Controller.Audio
 {
-    public enum AudioCategory
-    {
-        Bgm,
-        Sfx,
-        Voice
-    }
-
     /// <summary>Main-thread access. Cache queries never load; every successful acquisition
     /// owns a lease. Completion runs exactly once, including failure (null).</summary>
     public interface IAudioClipProvider

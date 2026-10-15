@@ -30,11 +30,11 @@ namespace Controller.Audio
         void UpdateVolume(AudioChannel channel, float normalizedVolume);
     }
 
-    public enum AudioChannel
+    /// <summary>Optional upkeep for a settings handler: resend, reset or save the stored volumes.</summary>
+    public interface IAudioSettingsMaintenance
     {
-        Master,
-        Bgm,
-        Sfx,
-        Voice
+        void BroadcastStoredVolumes();
+        void ResetSettings();
+        void Flush();
     }
 }

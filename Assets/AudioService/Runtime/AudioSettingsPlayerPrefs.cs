@@ -4,12 +4,6 @@ using UnityEngine.Serialization;
 
 namespace Controller.Audio
 {
-    public interface IAudioSettingsMaintenance
-    {
-        void BroadcastStoredVolumes();
-        void ResetSettings();
-        void Flush();
-    }
     [DisallowMultipleComponent]
     public class AudioSettingsPlayerPrefs : MonoBehaviour, IAudioSettingsHandler, IAudioSettingsMaintenance
     {

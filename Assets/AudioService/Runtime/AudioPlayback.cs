@@ -22,6 +22,22 @@ namespace Controller.Audio
         public static implicit operator AudioId(string value) => new AudioId(value);
     }
 
+    public enum AudioCategory
+    {
+        Bgm,
+        Sfx,
+        Voice
+    }
+
+    // Master followed by one channel per AudioCategory, in the same order (see AudioMixerLayout).
+    public enum AudioChannel
+    {
+        Master,
+        Bgm,
+        Sfx,
+        Voice
+    }
+
     public enum AudioPlaybackState
     {
         Loading,
