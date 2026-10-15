@@ -59,6 +59,9 @@ namespace Controller.Audio.Editor
         private static bool IsMainStage(GameObject gameObject)
             => StageUtility.GetStageHandle(gameObject) == StageUtility.GetMainStageHandle();
 
+        private static bool IsActiveInLoadedScenes(AudioListener listener)
+            => listener.isActiveAndEnabled && listener.gameObject.scene.isLoaded && IsMainStage(listener.gameObject);
+
         // Where AudioCtrl sits, and whether exactly one listener hears the loaded scenes.
         private static void CheckScene(AudioController controller, List<AudioSetupIssue> issues)
         {
@@ -70,7 +73,7 @@ namespace Controller.Audio.Editor
             int listeners = 0;
             AudioListener extra = null;
             foreach (var listener in Object.FindObjectsByType<AudioListener>(FindObjectsInactive.Exclude))
-                if (listener.isActiveAndEnabled && listener.gameObject.scene.isLoaded && IsMainStage(listener.gameObject))
+                if (IsActiveInLoadedScenes(listener))
                 {
                     listeners++;
                     extra = listener;
