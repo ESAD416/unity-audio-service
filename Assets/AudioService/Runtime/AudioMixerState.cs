@@ -79,9 +79,9 @@ namespace Controller.Audio
         public float GetVolume(AudioChannel channel) => AudioValues.IsValidChannel(channel) ? volumes[(int)channel] : 0;
         public void SetVolume(AudioChannel channel, float value, bool persist = true)
         {
-            int index = (int)channel;
             if (!AudioValues.IsValidChannel(channel))
                 return;
+            int index = (int)channel;
             bool previous = applyingSettings;
             applyingSettings |= !persist;
             try
@@ -89,25 +89,7 @@ namespace Controller.Audio
                 value = AudioValues.Unit(value);
                 bool changed = volumes[index] != value;
                 if (changed)
-                {
-                    float bgm = SourceGain(AudioCategory.Bgm);
-                    float sfx = SourceGain(AudioCategory.Sfx);
-                    float voice = SourceGain(AudioCategory.Voice);
-                    volumes[index] = value;
-                    if (Applied)
-                        ApplyParameter(index);
-                    // A mixer-applied volume leaves source gains unchanged; refresh only moved categories.
-                    var moved = CategoryMask.None;
-                    if (bgm != SourceGain(AudioCategory.Bgm))
-                        moved |= CategoryMask.Bgm;
-                    if (sfx != SourceGain(AudioCategory.Sfx))
-                        moved |= CategoryMask.Sfx;
-                    if (voice != SourceGain(AudioCategory.Voice))
-                        moved |= CategoryMask.Voice;
-                    if (moved != CategoryMask.None)
-                        refreshGains(moved);
-                }
-
+                    StoreVolume(index, value);
                 // Persist even an unchanged value after a temporary, nonpersistent override.
                 if (!applyingSettings && AudioValues.Alive(settings))
                     settings.UpdateVolume(channel, value);
@@ -119,6 +101,24 @@ namespace Controller.Audio
                 applyingSettings = previous;
             }
         }
+
+        // Write the volume and its mixer parameter. A mixer-applied volume leaves source
+        // gains unchanged, so only categories whose source gain moved are refreshed.
+        private void StoreVolume(int index, float value)
+        {
+            float bgm = SourceGain(AudioCategory.Bgm);
+            float sfx = SourceGain(AudioCategory.Sfx);
+            float voice = SourceGain(AudioCategory.Voice);
+            volumes[index] = value;
+            if (Applied)
+                ApplyParameter(index);
+            var moved = Moved(AudioCategory.Bgm, bgm) | Moved(AudioCategory.Sfx, sfx) | Moved(AudioCategory.Voice, voice);
+            if (moved != CategoryMask.None)
+                refreshGains(moved);
+        }
+
+        private CategoryMask Moved(AudioCategory category, float before)
+            => SourceGain(category) != before ? AudioMixerLayout.MaskOf(category) : CategoryMask.None;
 
         private void ApplyParameter(int index) => parameters[index] = mixer != null && mixer.SetFloat(AudioMixerLayout.Parameter(index), AudioValues.Decibels(volumes[index]));
         public void Apply()
