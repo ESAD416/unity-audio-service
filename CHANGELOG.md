@@ -1,5 +1,13 @@
 # 變更紀錄
 
+## Unreleased - 移除過時的播放參數與重複規則（2026-10-15）
+
+- 引擎 `Play` 拆成「播放外部 clip」與「播放已解析位址」兩個多載，移除從未讀取的 `id` 參數與兩段走不到的 fallback；`StartAccepted` 由 7 個參數減為 4 個，Controller 的 `Request` 改為兩個並列的提前 return。`id` 是 `b996b04` 為了延後建立 class 型別的預設位址而加入，`80f169f` 改用 struct 的 `ResolvedAudioClip` 後就不再需要。
+- 引擎 `Finish` 的 `resumePending` 旗標拆成 `Retire`（結束並回傳等待中的播放）與 `Finish`（`Retire` 後啟動等待者）。
+- `AudioMixerState.SetVolume` 抽出 `StoreVolume`，三組增益前後比較合為 `Moved` 的組合。
+- 「只在 Editor 與開發版記錄」的規則集中為 `AudioFailureLog.Enabled`；AudioService 與 Controller 的記錄改為關閉時回傳 null 的屬性，四個回報點都成為一行 `?.Report(...)`。
+- 公開 API、Prefab、序列化欄位、行為與診斷文字不變。本機 PlayMode 402／402、EditMode 29／29 通過，配置事件與上一輪相同；本輪未重跑 macOS Player。詳見改善計畫 §5.30。
+
 ## Unreleased - 範例、Editor 診斷與零碎整理（2026-10-15）
 
 - `AudioControllerDebugMenu` 的播放、停止與音量項目改走 `AudioService`，移除 18 個方法各自呼叫的 Controller 守衛（其中 7 個根本沒用到 controller）與多餘的 `Initialize()`；AudioCtrl 不存在或未就緒時改由 `AudioService` 警告。8 處空 key 檢查合為 `HasKey`，統一用 `IsNullOrWhiteSpace`。

@@ -2,9 +2,9 @@
 
 文件日期：2026-10-15
 
-文件版本：1.34
+文件版本：1.35
 
-狀態：完成範例、Editor 診斷與零碎整理，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.29）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成過時播放參數、Finish 旗標、SetVolume 與開發版記錄規則整理，本輪完整 PlayMode 402／402、EditMode 29／29 通過（見 5.30）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1307,6 +1307,25 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；第一版 `OwnedSound` 的完整測試同樣全數通過。本機測試只配合修改：5 個檔案補上 `using Controller.Audio.Samples;`，QuickStart 相關測試改經 `OwnedSound.Handle` 讀取 handle；未新增測試。本機量測的 20 組配置事件中位數與 §5.28 相同。XML／log 位於 `work/stage-two-hardening/samples-{run2,editor-run2}-20261015.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
 
+### 5.30 移除過時的播放參數與重複規則
+
+記錄日期：2026-10-15。依使用者指定，完成第四次程式碼檢視中「技術債明確」的四項（第 1～4 項），從 `3597f23` 開始修改，未提交。公開 API、Prefab、序列化欄位、行為與診斷文字不變。
+
+| 項目 | 處理 |
+| --- | --- |
+| 1 引擎 Play 的來源參數 | `Play(category, address?, direct, options, slot, id)` 拆成 `Play(category, clip, options, slot)` 與 `Play(address, options, slot)`，共用 `NewHandle`、`Admit` 與 `StartAccepted`；位址本身帶分類，不再另傳。移除從未讀取的 `id`、`address?.Id ?? id.Value` 與 `address ?? new ResolvedAudioClip(...)`，`StartAccepted` 由 7 個參數減為 4 個，Controller 的 `Request` 改為兩個並列的提前 return |
+| 2 Finish 旗標 | `Finish(..., resumePending)` 拆成 `Retire`（結束並回傳等待該聲源的播放）與 `Finish`（`Retire` 後啟動等待者）；`Start` 接手聲源時直接呼叫 `Retire` |
+| 3 SetVolume | 寫入音量、套用 Mixer 參數與只刷新增益有變的分類抽成 `StoreVolume`，三組前後比較改為 `Moved` 的組合；通道索引移到驗證之後 |
+| 4 開發版記錄 | `Application.isEditor \|\| Debug.isDebugBuild` 的四處重複集中為 `AudioFailureLog.Enabled`；AudioService 的 `MissingControllerLog` 與 Controller 的 `FailureLog` 在關閉時回傳 null，四個回報點都成為一行 `?.Report(...)`，原本的 `LogsFailures` 移除 |
+
+**第 1 項的由來：** `id` 由 `b996b04`（§5.16 第一批「降低播放配置」）加入。當時位址型別 `AudioClipAddress` 是 class，Catalog 查不到（包括沒有設定 Catalog 的預設情況）時，每次 ID 播放都會配置一個預設位址；改為傳 `null` 與原始 ID，讓引擎先以分類＋ID 查暖快取，真正載入才建立位址。同日的 `80f169f` 把查詢結果改為 `readonly struct ResolvedAudioClip`，Controller 隨即一律建立位址，延後已無配置可省；`id` 與 fallback 隨型別轉換保留下來，因為型別正確、測試也走不到，一直沒被發現。`24bcd88` 改寫成 `TryResolve` 時仍照樣傳遞。
+
+**易用性檢查：** 使用流程、公開 API 與診斷文字不變，屬純內部整理。
+
+**維護性檢查：** 引擎的播放入口由參數型別就看得出來源，不再有三選一參數與走不到的分支；引擎已沒有切換流程的布林參數；`SetVolume` 只剩夾值、存檔與事件；開發版記錄規則只有一處。新增的 `NewHandle`、`Admit` 與兩個多載不增加配置。
+
+**驗證：** Unity 6000.6.3f1 本機完整 PlayMode **402／402**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；本機測試未修改，也未新增測試。本機量測的 20 組配置事件中位數與 §5.29 相同。XML／log 位於 `work/stage-two-hardening/review4-{run1,editor-run1}-20261015.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1513,6 +1532,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成 PlayerPrefs 通道索引、設定綁定旗標、Controller 守衛統一與 Resources key 解析整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.27。
 - [x] 完成 Tween 具名工廠、StopResult、內建型別與 tuple、長 lambda 與 Fallback 重複整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.28。
 - [x] 完成 DebugMenu 守衛與命名空間、QuickStart 的 OwnedSound、SaveCount 改為 internal、Addressables 註解與 GetIssues 拆分；PlayMode 402／402、EditMode 29／29 通過，見 §5.29。
+- [x] 完成引擎 Play 來源參數、Finish 旗標、SetVolume 拆分與開發版記錄規則集中；PlayMode 402／402、EditMode 29／29 通過，見 §5.30。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1565,3 +1585,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.32 | 2026-10-14 | 移除最後一處 enum 順序耦合；拆掉設定綁定的旗標參數；Controller 命令統一經過 ReadyEngine 並合併 Mixer 套用；Resources key 解析共用；PlayMode 402／402、EditMode 29／29 通過，見 §5.27 |
 | 1.33 | 2026-10-15 | Tween 改用具名工廠與 Is；統一停止結果規則；改用 StrongBox 與 tuple；抽出準備佇列與失敗提示的長邏輯並合併 Fallback 重複；PlayMode 402／402、EditMode 29／29 通過，見 §5.28 |
 | 1.34 | 2026-10-15 | DebugMenu 改走 AudioService 並移至 Samples 命名空間；QuickStart 抽出 OwnedSound；SaveCount 改為 internal；GetIssues 拆成場景與 Play Mode 檢查；PlayMode 402／402、EditMode 29／29 通過，見 §5.29 |
+| 1.35 | 2026-10-15 | 引擎 Play 拆成 clip／位址兩個多載並移除過時的 id；Finish 旗標拆成 Retire；SetVolume 抽出 StoreVolume；開發版記錄規則集中；PlayMode 402／402、EditMode 29／29 通過，見 §5.30 |
