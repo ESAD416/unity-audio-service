@@ -13,6 +13,8 @@ namespace Controller.Audio
     public static class AudioService
     {
         private static AudioFailureLog missingControllerLog;
+        // Without a controller, warnings go to this shared log; it is null in release builds.
+        private static AudioFailureLog MissingControllerLog => AudioFailureLog.Enabled ? (missingControllerLog ??= new AudioFailureLog()) : null;
         public static bool Ready => AudioController.Instance != null && AudioController.Instance.Ready;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
@@ -57,8 +59,8 @@ namespace Controller.Audio
             var controller = AudioController.Instance;
             if (controller != null)
                 controller.ReportPlaybackFailure(category, id, reason);
-            else if (Application.isEditor || Debug.isDebugBuild)
-                (missingControllerLog ??= new AudioFailureLog()).Report(null, category, id, reason);
+            else
+                MissingControllerLog?.Report(null, category, id, reason);
             return AudioHandle.Failed(category, id, reason);
         }
         private static AudioController Controller
@@ -70,8 +72,8 @@ namespace Controller.Audio
                 const string reason = "Audio service is not ready. Enable AudioCtrl.prefab and call controls from Start or later";
                 if (controller != null)
                     controller.ReportControlFailure(reason);
-                else if (Application.isEditor || Debug.isDebugBuild)
-                    (missingControllerLog ??= new AudioFailureLog()).ReportControl(null, reason);
+                else
+                    MissingControllerLog?.ReportControl(null, reason);
                 return null;
             }
         }

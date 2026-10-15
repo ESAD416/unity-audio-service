@@ -142,7 +142,7 @@ namespace Controller.Audio
         // A different provider or catalog would be lost without notice, so name the active one.
         private void ReportDiscardedDuplicate(AudioController active)
         {
-            if (!Application.isEditor && !Debug.isDebugBuild)
+            if (!AudioFailureLog.Enabled)
                 return;
             static Type SourceType(MonoBehaviour source) => source != null ? source.GetType() : null;
             if (SourceType(clipProviderSource) == SourceType(active.clipProviderSource) && catalog == active.catalog)
@@ -439,17 +439,10 @@ namespace Controller.Audio
                 Debug.LogWarning("[AudioController] " + message, this);
         }
 
-        private bool LogsFailures => logPlaybackFailures && (Application.isEditor || Debug.isDebugBuild);
+        // Null while playback warnings are off. Clearing the field starts a fresh set of warnings.
+        private AudioFailureLog FailureLog => logPlaybackFailures && AudioFailureLog.Enabled ? (failureLog ??= new AudioFailureLog()) : null;
         internal void ReportPlaybackFailure(AudioCategory category, AudioId id, string reason, ResolvedAudioClip? address = null, bool allowAsync = true)
-        {
-            if (LogsFailures)
-                (failureLog ??= new AudioFailureLog()).Report(this, category, id, reason, address, allowAsync);
-        }
-
-        internal void ReportControlFailure(string reason)
-        {
-            if (LogsFailures)
-                (failureLog ??= new AudioFailureLog()).ReportControl(this, reason);
-        }
+            => FailureLog?.Report(this, category, id, reason, address, allowAsync);
+        internal void ReportControlFailure(string reason) => FailureLog?.ReportControl(this, reason);
     }
 }

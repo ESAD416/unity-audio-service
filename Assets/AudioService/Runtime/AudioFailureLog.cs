@@ -7,6 +7,9 @@ namespace Controller.Audio
     // build diagnostic strings or query providers for diagnostic information.
     internal sealed class AudioFailureLog
     {
+        /// <summary>Setup and failure warnings are development aids: the Editor and development builds only.</summary>
+        public static bool Enabled => Application.isEditor || Debug.isDebugBuild;
+
         private const int Limit = 64;
         private readonly HashSet<(AudioCategory, string, string)> reported = new();
         private readonly HashSet<string> controlReasons = new();
