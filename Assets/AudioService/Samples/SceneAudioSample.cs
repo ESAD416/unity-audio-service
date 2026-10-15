@@ -37,16 +37,18 @@ namespace Controller.Audio.Samples
             float requestedVolume = volume;
             int request = ++version;
             group = "SceneAudioSample:" + GetEntityId().ToString();
+            // A late completion after disable, cancellation, or a new request
+            // must never restart audio. Capture the key before asynchronous work.
+            bool IsCurrent() => this != null && request == version && isActiveAndEnabled && owner == controller;
             owner.PrepareClip(AudioCategory.Sfx, key, group, ready =>
             {
-                // A late completion after disable, cancellation, or a new request
-                // must never restart audio. Capture the key before asynchronous work.
-                if (this == null || request != version || !isActiveAndEnabled || owner != controller) return;
+                if (!IsCurrent()) return;
                 if (!ready)
                 {
                     Debug.LogWarning($"[SceneAudioSample] Could not prepare SFX '{key}'. Check the provider/key, or retry after cancellation.", this);
                     return;
                 }
+                // Play only through the controller that prepared the clip, while it is ready.
                 if (owner != AudioController.Instance || !owner.Ready) return;
                 ownedSound = AudioService.PlaySfx(key, new PlayOptions { Loop = true, Volume = requestedVolume });
             });

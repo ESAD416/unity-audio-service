@@ -46,10 +46,12 @@ namespace Controller.Audio.Samples
             preparedGroup = "AudioDebugMenu:" + GetEntityId().ToString();
             string key = bgmKey;
             int version = ++preparationVersion;
+            // A late completion after release, disable or a newer request must not play.
+            bool IsCurrent() => this != null && version == preparationVersion && isActiveAndEnabled;
             controller.PrewarmSources(preparedSourceCapacity);
             controller.PrepareClip(AudioCategory.Bgm, key, preparedGroup, ready =>
             {
-                if (this == null || version != preparationVersion || !isActiveAndEnabled) return;
+                if (!IsCurrent()) return;
                 if (ready && controller != null && controller.Ready) preparedBgm = AudioService.PlayBgm(key);
                 else Debug.LogWarning("[AudioControllerDebugMenu] BGM preparation did not complete. Retry after the service is ready.", this);
             });
