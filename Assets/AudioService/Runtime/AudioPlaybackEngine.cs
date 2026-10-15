@@ -95,9 +95,28 @@ namespace Controller.Audio
             public int StartedFrame;
         }
 
+        // A replacement slot (BGM or dialogue): the sound playing in it and the newer request
+        // waiting to replace it. The engine changes either role only through these methods.
         private sealed class SlotState
         {
-            public Playback Current, Pending;
+            public Playback Current { get; private set; }
+            public Playback Pending { get; private set; }
+
+            public void Reserve(Playback playback) => Pending = playback;
+
+            public void Promote(Playback playback)
+            {
+                Pending = null;
+                Current = playback;
+            }
+
+            public void Leave(Playback playback)
+            {
+                if (Pending == playback)
+                    Pending = null;
+                if (Current == playback)
+                    Current = null;
+            }
         }
 
         // Temporary per-channel controls; saved player volume lives in AudioMixerState.
@@ -329,7 +348,7 @@ namespace Controller.Audio
             {
                 if (state.Pending != null)
                     Finish(state.Pending, AudioCompletion.Cancelled);
-                state.Pending = playback;
+                state.Reserve(playback);
             }
 
             AddActive(playback);
@@ -405,13 +424,7 @@ namespace Controller.Audio
                 Retire(emitter.Current, AudioCompletion.Stopped);
             if (playback.Handle.IsFinished || disposed)
                 return;
-            var state = GetSlot(playback.Slot);
-            if (state != null)
-            {
-                state.Pending = null;
-                state.Current = playback;
-            }
-
+            GetSlot(playback.Slot)?.Promote(playback);
             emitter.Pending = null;
             emitter.Current = playback;
             emitter.Transition = default;
@@ -450,7 +463,7 @@ namespace Controller.Audio
             playback.CancelLoad = null;
             var hold = playback.Hold;
             playback.Hold = default;
-            LeaveSlot(playback);
+            GetSlot(playback.Slot)?.Leave(playback);
             var waiting = LeaveEmitter(playback);
             if (reason != null)
                 RecordFailure(reason);
@@ -460,17 +473,6 @@ namespace Controller.Audio
             AudioCallbacks.Invoke(cancel);
             hold.Release();
             return waiting;
-        }
-
-        private void LeaveSlot(Playback playback)
-        {
-            var state = GetSlot(playback.Slot);
-            if (state == null)
-                return;
-            if (state.Pending == playback)
-                state.Pending = null;
-            if (state.Current == playback)
-                state.Current = null;
         }
 
         // Detach from the native source and recycle it once unused. Returns the request
