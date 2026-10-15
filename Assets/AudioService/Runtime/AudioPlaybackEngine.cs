@@ -415,16 +415,20 @@ namespace Controller.Audio
             => incoming.Slot == PlaybackSlot.Bgm && incoming.Options.FadeOutSeconds > 0
                 && emitter.Current != null && emitter.Source.isPlaying;
 
+        // Only the request still waiting for its source starts; a finished or replaced one does not.
+        private bool CanStart(Playback playback)
+            => !disposed && !playback.Handle.IsFinished && playback.Emitter.Pending == playback;
+
         private void Start(Playback playback)
         {
-            if (disposed || playback.Handle.IsFinished || playback.Emitter.Pending != playback)
+            if (!CanStart(playback))
                 return;
             var emitter = playback.Emitter;
             // This playback is the one waiting for the source, so retire the current sound
             // without starting its waiter again.
             if (emitter.Current != null)
                 Retire(emitter.Current, AudioCompletion.Stopped);
-            if (playback.Handle.IsFinished || disposed)
+            if (!CanStart(playback))
                 return;
             GetSlot(playback.Slot)?.Promote(playback);
             emitter.Pending = null;
