@@ -61,7 +61,10 @@ namespace Controller.Audio
                 return false;
             if (ReferenceEquals(provider, target))
                 return true;
-            return visited.Add(provider) && provider is FallbackAudioClipProvider fallback && (Contains(fallback.Primary, target, visited) || Contains(fallback.Secondary, target, visited));
+            // Only another fallback leads further, and each one is searched once.
+            if (provider is not FallbackAudioClipProvider fallback || !visited.Add(fallback))
+                return false;
+            return Contains(fallback.Primary, target, visited) || Contains(fallback.Secondary, target, visited);
         }
 
         private void OnEnable()
