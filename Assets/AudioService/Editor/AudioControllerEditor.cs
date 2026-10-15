@@ -35,6 +35,17 @@ namespace Controller.Audio.Editor
             using (new EditorGUI.DisabledScope(true))
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("m_Script"));
             EditorGUILayout.HelpBox("Use AudioService.PlayBgm / PlaySfx / PlayVoice. Every play returns a handle; keep it only when you need to control that sound. No preload or prewarm is required for basic playback.", MessageType.Info);
+            DrawSettings();
+            if (serializedObject.ApplyModifiedProperties())
+                RequestChecks();
+            var controller = (AudioController)target;
+            DrawChecks(controller);
+            if (Application.isPlaying)
+                DrawPlayModeState(controller);
+        }
+        // Setup fields lock in Play Mode; the logging switches stay editable.
+        private void DrawSettings()
+        {
             using (new EditorGUI.DisabledScope(Application.isPlaying))
             {
                 Field("clipProviderSource");
@@ -44,23 +55,20 @@ namespace Controller.Audio.Editor
             }
             Field("logPlaybackFailures");
             advanced = EditorGUILayout.Foldout(advanced, "Advanced settings", true);
-            if (advanced)
+            if (!advanced)
+                return;
+            using (new EditorGUI.DisabledScope(Application.isPlaying))
             {
-                using (new EditorGUI.DisabledScope(Application.isPlaying))
-                {
-                    Field("loadDefaultMixer");
-                    Field("maxConcurrentSounds");
-                    Field("concurrencyPolicy");
-                    Field("pauseOnBackground");
-                }
-                Field("verboseLogging");
-                EditorGUILayout.HelpBox("Max Concurrent Sounds includes BGM, SFX and Voice. 0 means no service limit.", MessageType.Info);
+                Field("loadDefaultMixer");
+                Field("maxConcurrentSounds");
+                Field("concurrencyPolicy");
+                Field("pauseOnBackground");
             }
-            if (serializedObject.ApplyModifiedProperties())
-                RequestChecks();
-            var controller = (AudioController)target;
-            DrawChecks(controller);
-            if (!Application.isPlaying) return;
+            Field("verboseLogging");
+            EditorGUILayout.HelpBox("Max Concurrent Sounds includes BGM, SFX and Voice. 0 means no service limit.", MessageType.Info);
+        }
+        private void DrawPlayModeState(AudioController controller)
+        {
             EditorGUILayout.HelpBox("Stop Play Mode to change setup here. Runtime configuration changes should use AudioController properties/methods so caches and routing refresh together.", MessageType.Info);
             var state = controller.Diagnostics;
             EditorGUILayout.LabelField("Service", controller.Ready ? "Ready" : "Not ready");
@@ -68,12 +76,13 @@ namespace Controller.Audio.Editor
             if (!string.IsNullOrEmpty(state.LastFailure))
                 EditorGUILayout.HelpBox("Last recorded failure (may be historical): " + state.LastFailure, MessageType.Warning);
             channelControls = EditorGUILayout.Foldout(channelControls, "Channel controls (read only)", true);
-            if (channelControls && controller.Ready)
-                foreach (var channel in AudioMixerLayout.Channels)
-                {
-                    var output = controller.GetChannelDiagnostics(channel);
-                    EditorGUILayout.LabelField(channel.ToString(), $"Volume {output.Volume:P0} / Fade {output.FadeGain:P0} / {(output.Muted ? "Muted" : "Unmuted")}");
-                }
+            if (!channelControls || !controller.Ready)
+                return;
+            foreach (var channel in AudioMixerLayout.Channels)
+            {
+                var output = controller.GetChannelDiagnostics(channel);
+                EditorGUILayout.LabelField(channel.ToString(), $"Volume {output.Volume:P0} / Fade {output.FadeGain:P0} / {(output.Muted ? "Muted" : "Unmuted")}");
+            }
         }
         private void DrawChecks(AudioController controller)
         {
