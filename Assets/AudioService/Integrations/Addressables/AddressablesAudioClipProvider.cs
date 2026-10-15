@@ -171,10 +171,10 @@ namespace Controller.Audio
             }
 
             aliases[key] = op;
-            if (op.LookupKey == null)
-                op.LookupKey = key;
             // The forward map already excludes duplicate bindings; an extra
             // hash index would add memory without helping the release scan.
+            if (op.LookupKey == null)
+                op.LookupKey = key;
             else
                 (op.OtherLookupKeys ??= new List<string>()).Add(key);
         }

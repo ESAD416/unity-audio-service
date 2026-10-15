@@ -171,7 +171,8 @@ namespace Controller.Audio
             => channel is AudioChannel.Master or AudioChannel.Bgm or AudioChannel.Sfx or AudioChannel.Voice;
         internal static bool IsValidCategory(AudioCategory category)
             => category is AudioCategory.Bgm or AudioCategory.Sfx or AudioCategory.Voice;
-        internal static bool Alive(object value) => value != null && (!(value is UnityEngine.Object obj) || obj != null);
+        // A destroyed UnityEngine.Object only compares equal to null through its own operator.
+        internal static bool Alive(object value) => value is UnityEngine.Object obj ? obj != null : value != null;
     }
 
     /// <summary>Read-only controls for one channel, before Master, listener and mixer effects are combined.</summary>

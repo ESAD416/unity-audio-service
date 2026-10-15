@@ -36,15 +36,18 @@ namespace Controller.Audio
             return entry;
         }
 
-        // A null Resources key falls back to the ID; an empty key disables Resources for that clip.
-        private static string KeyOf(ResolvedAudioClip address) => address.ResourcesKey ?? address.Id;
+        // The Resources path of an address, or null when it has no key. A null Resources
+        // key falls back to the ID; an empty key disables Resources for that clip.
+        private string PathOf(ResolvedAudioClip address)
+        {
+            string key = address.ResourcesKey ?? address.Id;
+            return string.IsNullOrWhiteSpace(key) ? null : BuildPath(address.Category, key);
+        }
 
         public bool TryGetCachedClip(ResolvedAudioClip address, out AudioClip clip)
         {
-            clip = null;
-            string key = KeyOf(address);
-            if (!string.IsNullOrWhiteSpace(key) && cache.TryGetValue(BuildPath(address.Category, key), out var entry))
-                clip = entry.Clip;
+            string path = PathOf(address);
+            clip = path != null && cache.TryGetValue(path, out var entry) ? entry.Clip : null;
             return clip != null;
         }
 
@@ -57,11 +60,8 @@ namespace Controller.Audio
         public bool TryAcquireClip(ResolvedAudioClip address, out AudioClipLease lease)
         {
             lease = null;
-            string key = KeyOf(address);
-            if (string.IsNullOrWhiteSpace(key))
-                return false;
-            string path = BuildPath(address.Category, key);
-            var entry = Load(path);
+            string path = PathOf(address);
+            var entry = path != null ? Load(path) : null;
             if (entry == null)
                 return false;
             entry.Users++;
@@ -86,10 +86,7 @@ namespace Controller.Audio
         public void RefreshClipLookup() => cache.Clear();
         private void OnDestroy() => RefreshClipLookup();
         public string DescribeLookup(ResolvedAudioClip address)
-        {
-            string key = KeyOf(address);
-            return string.IsNullOrWhiteSpace(key) ? "Resources disabled (empty key)" : $"Resources path='{BuildPath(address.Category, key)}'";
-        }
+            => PathOf(address) is { } path ? $"Resources path='{path}'" : "Resources disabled (empty key)";
 
         private string BuildPath(AudioCategory category, string key)
         {

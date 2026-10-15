@@ -8,6 +8,12 @@ namespace Controller.Audio.Editor
     public static class AudioImportTools
     {
         private const string Menu = "Tools/Audio Service/Audio Imports/";
+        private const string ReviewMenu = Menu + "Review Selected Clips";
+        private const string StreamingMenu = Menu + "Apply Streaming to Selected (Default Only)";
+        private const string BackgroundMenu = Menu + "Apply Background Decompression to Selected (Default Only)";
+        // A clip this long, or this large as float PCM, is worth reviewing for loading cost.
+        private const float LongClipSeconds = 30f;
+        private const long LargePcmBytes = 8 * 1024 * 1024;
 
         public static IReadOnlyList<string> GetIssues(AudioClip clip, AudioImporter importer, string platform = null)
         {
@@ -18,7 +24,7 @@ namespace Controller.Audio.Editor
             string scope = overridden ? platform : "Default";
             // A PCM estimate identifies candidates, not measured native audio memory.
             long pcmEstimate = (long)clip.samples * clip.channels * sizeof(float);
-            bool large = clip.length >= 30f || pcmEstimate >= 8 * 1024 * 1024;
+            bool large = clip.length >= LongClipSeconds || pcmEstimate >= LargePcmBytes;
             if (large && settings.loadType == AudioClipLoadType.DecompressOnLoad)
             {
                 issues.Add($"{scope}: long/large clip uses Decompress On Load. Estimated float PCM: {pcmEstimate / (1024f * 1024f):F1} MiB. Compare Streaming on the target platform.");
@@ -29,7 +35,7 @@ namespace Controller.Audio.Editor
             return issues;
         }
 
-        [MenuItem(Menu + "Review Selected Clips")]
+        [MenuItem(ReviewMenu)]
         private static void ReviewSelected()
         {
             string platform = BuildPipeline.GetBuildTargetGroup(EditorUserBuildSettings.activeBuildTarget).ToString();
@@ -65,13 +71,13 @@ namespace Controller.Audio.Editor
                 Debug.Log($"[Audio Imports] {path}: Default = {loadType}, background enabled, preload disabled. Compression, quality, sample rate and platform overrides preserved; review overrides and call PrepareClip before playback.", clip);
             }
         }
-        [MenuItem(Menu + "Apply Streaming to Selected (Default Only)")]
+        [MenuItem(StreamingMenu)]
         private static void ApplyStreaming() => ApplySelected(AudioClipLoadType.Streaming);
-        [MenuItem(Menu + "Apply Background Decompression to Selected (Default Only)")]
+        [MenuItem(BackgroundMenu)]
         private static void ApplyBackground() => ApplySelected(AudioClipLoadType.DecompressOnLoad);
-        [MenuItem(Menu + "Review Selected Clips", true)]
-        [MenuItem(Menu + "Apply Streaming to Selected (Default Only)", true)]
-        [MenuItem(Menu + "Apply Background Decompression to Selected (Default Only)", true)]
+        [MenuItem(ReviewMenu, true)]
+        [MenuItem(StreamingMenu, true)]
+        [MenuItem(BackgroundMenu, true)]
         private static bool HasSelectedClips() => !EditorApplication.isPlayingOrWillChangePlaymode && Selection.GetFiltered<AudioClip>(SelectionMode.DeepAssets).Length > 0;
     }
 }

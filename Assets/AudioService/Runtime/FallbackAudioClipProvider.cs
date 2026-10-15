@@ -21,6 +21,8 @@ namespace Controller.Audio
         private IAudioClipProvider Secondary => configured ? backup : backupProvider as IAudioClipProvider;
         // The backup is skipped when it is the same provider as the primary.
         private IAudioClipProvider DistinctSecondary => ReferenceEquals(Primary, Secondary) ? null : Secondary;
+        // PreferAvailable also takes what the backup has at once; PrimaryThenBackup waits for the primary first.
+        private bool PrefersAvailable => policy == AudioFallbackPolicy.PreferAvailable;
 
         public event Action Changed;
         public AudioFallbackPolicy Policy
@@ -67,7 +69,8 @@ namespace Controller.Audio
             if (FormsCycle(Primary, Secondary))
             {
                 Debug.LogError("[AudioService] Cyclic fallback configuration.", this);
-                main = backup = null;
+                main = null;
+                backup = null;
                 configured = true;
             }
 
@@ -98,18 +101,15 @@ namespace Controller.Audio
         }
 
         public bool TryGetCachedClip(ResolvedAudioClip address, out AudioClip clip)
-        {
-            clip = null;
-            if (AudioValues.Alive(Primary) && Primary.TryGetCachedClip(address, out clip))
-                return true;
-            return policy == AudioFallbackPolicy.PreferAvailable && AudioValues.Alive(Secondary) && Secondary.TryGetCachedClip(address, out clip);
-        }
+            => TryGetCached(Primary, address, out clip) || (PrefersAvailable && TryGetCached(Secondary, address, out clip));
 
         public bool TryAcquireClip(ResolvedAudioClip address, out AudioClipLease lease)
+            => TryAcquire(Primary, address, out lease) || (PrefersAvailable && TryAcquire(Secondary, address, out lease));
+
+        private static bool TryGetCached(IAudioClipProvider provider, ResolvedAudioClip address, out AudioClip clip)
         {
-            if (TryAcquire(Primary, address, out lease))
-                return true;
-            return policy == AudioFallbackPolicy.PreferAvailable && TryAcquire(Secondary, address, out lease);
+            clip = null;
+            return AudioValues.Alive(provider) && provider.TryGetCachedClip(address, out clip);
         }
 
         private static bool TryAcquire(IAudioClipProvider provider, ResolvedAudioClip address, out AudioClipLease lease)
@@ -128,7 +128,7 @@ namespace Controller.Audio
         {
             using var mutation = callbacks.Begin();
             int version = generation;
-            if (policy == AudioFallbackPolicy.PreferAvailable)
+            if (PrefersAvailable)
             {
                 AudioClipLease immediate = null;
                 bool acquired = false, threw = false;

@@ -148,6 +148,8 @@ namespace Controller.Audio
         private readonly Bus[] buses = new Bus[AudioMixerLayout.ChannelCount];
         private long nextId;
         private bool disposed, gamePaused, backgroundPaused, listenerPaused;
+        // New work needs an engine that is not shut down and a host that is initialized.
+        private bool Usable => !disposed && host.Ready;
         private AudioClipStore store;
         private IAudioClipProvider provider;
         private ConditionalWeakTable<AudioClip, StrongBox<AudioId>> externalIds;
@@ -243,7 +245,7 @@ namespace Controller.Audio
 
         public int PrewarmSources(int targetCount)
         {
-            if (disposed || !host.Ready || targetCount <= 0)
+            if (!Usable || targetCount <= 0)
                 return 0;
             int created = sources.Prewarm(targetCount);
             // Reserve playback bookkeeping as well as native sources.
@@ -254,7 +256,7 @@ namespace Controller.Audio
 
         public int TrimIdleSources(int minimumCapacity, int maxToRemove)
         {
-            if (disposed || !host.Ready || maxToRemove <= 0)
+            if (!Usable || maxToRemove <= 0)
                 return 0;
             return sources.Trim(Mathf.Max(0, minimumCapacity), maxToRemove);
         }
@@ -321,7 +323,7 @@ namespace Controller.Audio
 
         private string InvalidRequest(AudioHandle handle)
         {
-            if (disposed || !host.Ready)
+            if (!Usable)
                 return AudioHandle.NotReadyReason;
             if (!AudioValues.IsValidCategory(handle.Category))
                 return "Invalid AudioCategory. Use Bgm, Sfx or Voice";

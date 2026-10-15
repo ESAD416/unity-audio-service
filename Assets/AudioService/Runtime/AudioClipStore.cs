@@ -10,6 +10,14 @@ namespace Controller.Audio
         {
             public Action<AudioClipLease> Callback;
             public string Group;
+
+            // A waiter is answered once: hand over its callback and leave it empty.
+            public Action<AudioClipLease> Take()
+            {
+                var callback = Callback;
+                Callback = null;
+                return callback;
+            }
         }
 
         internal sealed class Entry
@@ -238,11 +246,9 @@ namespace Controller.Audio
             // ReleaseUnused/Stop from the first waiter cannot invalidate the rest.
             var deliveries = new (Action<AudioClipLease> callback, AudioClipLease lease)[count];
             int next = 0;
-            for (int i = 0; i < entry.Waiters.Count; i++)
+            foreach (var waiter in entry.Waiters)
             {
-                var waiter = entry.Waiters[i];
-                var callback = waiter.Callback;
-                waiter.Callback = null;
+                var callback = waiter.Take();
                 if (callback == null)
                     continue;
                 AudioClipLease lease = null;
@@ -280,10 +286,7 @@ namespace Controller.Audio
                 entry.Groups.Remove(group);
                 foreach (var waiter in entry.Waiters)
                     if (waiter.Group == group && waiter.Callback != null)
-                    {
-                        cancelled.Add(waiter.Callback);
-                        waiter.Callback = null;
-                    }
+                        cancelled.Add(waiter.Take());
 
                 Cleanup(entry);
             }
@@ -310,11 +313,7 @@ namespace Controller.Audio
             foreach (var entry in new List<Entry>(entries.Values))
             {
                 foreach (var waiter in entry.Waiters.ToArray())
-                {
-                    var callback = waiter.Callback;
-                    waiter.Callback = null;
-                    AudioCallbacks.Deliver(callback, null);
-                }
+                    AudioCallbacks.Deliver(waiter.Take(), null);
 
                 entry.Waiters.Clear();
                 entry.Groups.Clear();
