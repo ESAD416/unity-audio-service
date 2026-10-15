@@ -275,7 +275,7 @@ namespace Controller.Audio
         {
             UnbindCatalog();
             boundCatalog = catalog;
-            catalogRevision = catalog != null ? catalog.Revision : 0;
+            catalogRevision = RevisionOf(catalog);
             if (Ready && boundCatalog != null)
                 boundCatalog.Changed += RefreshCatalog;
         }
@@ -290,9 +290,12 @@ namespace Controller.Audio
         private void SyncCatalog()
         {
             // Inspector/serialization callbacks can run off-thread. Observe their revision here.
-            if (boundCatalog != catalog || (catalog != null && catalogRevision != catalog.Revision))
+            if (boundCatalog != catalog || catalogRevision != RevisionOf(catalog))
                 RefreshCatalog();
         }
+
+        // A missing or destroyed catalog counts as revision 0, like an empty binding.
+        private static int RevisionOf(AudioCatalog value) => value != null ? value.Revision : 0;
 
         private void AttachProviderNotifications()
         {
