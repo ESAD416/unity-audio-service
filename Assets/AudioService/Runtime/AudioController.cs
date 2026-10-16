@@ -8,6 +8,10 @@ namespace Esad.Audio
 {
     public class AudioController : MonoBehaviour
     {
+        // Used when no mixer is assigned, such as a controller added from code. Resources paths
+        // are shared by the whole project, so the package keeps its own folder name.
+        private const string DefaultMixerPath = "Esad.Audio/MasterMixer";
+
         [SerializeField]
         private MonoBehaviour clipProviderSource;
         [SerializeField]
@@ -119,7 +123,7 @@ namespace Esad.Audio
             if (!providerConfigured)
                 clipProvider = clipProviderSource as IAudioClipProvider;
             if (mixer == null && loadDefaultMixer)
-                mixer = Resources.Load<AudioMixer>("Audio/MasterMixer");
+                mixer = Resources.Load<AudioMixer>(DefaultMixerPath);
             MixerState.Configure(mixer);
             Ready = true;
             engine = new AudioPlaybackEngine(this, ClipProvider)
