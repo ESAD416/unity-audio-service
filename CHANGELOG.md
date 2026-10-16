@@ -1,5 +1,12 @@
 # 變更紀錄
 
+## Unreleased - 命名空間與組件改名為 Esad.Audio（2026-10-16）
+
+- **破壞性：** 根命名空間由 `Controller.Audio` 改為 `Esad.Audio`，Editor 與範例改為 `Esad.Audio.Editor`、`Esad.Audio.Samples`；四個組件與 asmdef 檔名一併改為 `Esad.Audio`、`Esad.Audio.Editor`、`Esad.Audio.Addressables`、`Esad.Audio.Samples`。`Controller` 太通用，打包成套件後容易和使用者專案撞名。處理方式見[遷移指南](Documentation/Migration.md)。
+- 腳本與資產 GUID 不變，場景與 Prefab 的引用不受影響。場景與 Prefab 中 11 個 `m_EditorClassIdentifier` 一併更新為新名稱，包括原本就過時的 4 個。
+- 套件名稱定為 `com.esad.audio-service`，`package.json` 在套件化時建立。
+- 本機 PlayMode 403／403、EditMode 29／29 通過，配置事件與上一輪相同；本機測試只配合改 `using` 與 asmdef 引用。本輪未重跑 macOS Player。詳見改善計畫 §5.34。
+
 ## Unreleased - Catalog 索引競態、忽略規則與 README 狀態（2026-10-16）
 
 - `AudioCatalog` 建立索引時只讀一次 entries，查找時使用自己建好的索引；序列化回呼在其他執行緒清掉索引或換掉 entries 時，`TryResolve` 不會再拋 NullReferenceException 或超出陣列範圍。一般情況下的查找結果與配置不變。

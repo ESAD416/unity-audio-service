@@ -18,7 +18,7 @@
 | `AudioMixerLayout` | Runtime 與 Editor 共用的唯讀 Mixer 參數／群組名稱、通道與分類的對應及分類遮罩；是唯一依賴 enum 順序的地方，不是公開 API |
 | `AudioCatalog` | 編輯資料與不可變執行期解析結果 |
 
-`Runtime/Controller.Audio.asmdef` 不引用 Addressables。`Integrations/Addressables/Controller.Audio.Addressables.asmdef` 依賴核心及 Addressables，依套件存在與否啟用。Editor 與 Samples 只引用核心；UPM 套件 manifest／完整宿主分離尚未完成。
+`Runtime/Esad.Audio.asmdef` 不引用 Addressables。`Integrations/Addressables/Esad.Audio.Addressables.asmdef` 依賴核心及 Addressables，依套件存在與否啟用。Editor 與 Samples 只引用核心；UPM 套件 manifest／完整宿主分離尚未完成。
 
 在入口場景根層放入一個 AudioCtrl，並保留一個有效 AudioListener。基本 Prefab 明確連接 Resources 與 PlayerPrefs 設定；需要 Addressables 時使用整合版 Prefab。自訂宿主在 Controller 的 Clip Provider Source／Settings Source 指定實作元件，或透過 SetClipProvider／BindSettings 明確配置。Fallback 不建立隱含元件。
 

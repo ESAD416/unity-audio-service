@@ -31,12 +31,24 @@
 
 | 舊入口／行為 | 新入口／處理方式 |
 | --- | --- |
-| `Controller.Audio.AudioControllerDebugMenu` | 命名空間改為 `Controller.Audio.Samples`，與其他範例一致；在引用它的檔案加上 `using Controller.Audio.Samples;`。腳本 GUID 不變，場景與 Prefab 的引用不受影響 |
+| `Controller.Audio.AudioControllerDebugMenu` | 現在的命名空間是 `Esad.Audio.Samples`（2026-10-16 起），與其他範例一致；在引用它的檔案加上 `using Esad.Audio.Samples;`。腳本 GUID 不變，場景與 Prefab 的引用不受影響 |
 | `AudioSettingsPlayerPrefs.SaveCount` | 改為 internal，沒有公開替代；需要確定已寫入磁碟時直接呼叫 `Flush()` |
 
 行為變更：
 
 - **DebugMenu 警告**：播放、停止與音量項目改走 `AudioService`。場景沒有 AudioCtrl 或它尚未就緒時，改由 `AudioService` 提示修正步驟，同一原因只提示一次，不再每次顯示 `AudioController.Instance is null`；AudioCtrl 停用時，音量項目也改為提示而不寫入。key 空白時一律提示 `<名稱> key is empty.`，「Prepare and Play BGM」也會提示（原本不提示）。
+
+## 2026-10-16 命名空間與組件改名
+
+為了打包成 UPM 套件，根命名空間由 `Controller.Audio` 改為 `Esad.Audio`，避免通用的 `Controller` 和使用者專案撞名；組件與 asmdef 檔名一併改名。腳本與資產的 GUID 都沒有改變，場景與 Prefab 的引用不受影響。
+
+| 舊名稱 | 新名稱 |
+| --- | --- |
+| 命名空間 `Controller.Audio` | `Esad.Audio`，引用處改為 `using Esad.Audio;` |
+| 命名空間 `Controller.Audio.Editor`、`Controller.Audio.Samples` | `Esad.Audio.Editor`、`Esad.Audio.Samples` |
+| 組件 `Controller.Audio`、`Controller.Audio.Editor`、`Controller.Audio.Addressables`、`Controller.Audio.Samples` | `Esad.Audio`、`Esad.Audio.Editor`、`Esad.Audio.Addressables`、`Esad.Audio.Samples` |
+
+自訂 asmdef 若以名稱引用這些組件，要改成新名稱；以 GUID 引用的不必改。完整型別名稱（例如 `Controller.Audio.AudioService`）同樣換成 `Esad.Audio.AudioService`。
 
 ## 播放與控制
 
@@ -68,7 +80,7 @@ SFX 循環不再自動替換上一個循環。需要風聲等單一擁有者時�
 - 不要依賴名為 BGM／Sound／Sound_Loop／Voice／Voice_Loop 的固定 AudioSource 子物件；所有來源都按需建立並共用動態池。
 - 自訂 UnityEvent 若綁定已移除的 Controller 播放方法，須重新綁定自己的 void adapter；可參考 Samples 的 AudioQuickStart。靜態 AudioService 不能直接取代 Inspector 裡的舊事件目標。
 - `PrewarmSources`／`TrimIdleSources`／`Diagnostics.CreatedSources` 現在計算全部聲源，不再另加五個相容聲源。Loading 預約算並發名額，但不占用 AudioSource。
-- DebugMenu 已移至 Samples 並保留腳本 GUID；自訂 assembly 若引用此類型，需參照 `Controller.Audio.Samples` assembly，2026-10-15 起命名空間也改為 `Controller.Audio.Samples`。
+- DebugMenu 已移至 Samples 並保留腳本 GUID；自訂 assembly 若引用此類型，需參照 `Esad.Audio.Samples` assembly，命名空間也是 `Esad.Audio.Samples`。
 
 ## 自訂 Provider
 
@@ -87,7 +99,7 @@ public interface IAudioClipProvider
 
 Resources 舊 `GetClip`／`TryGetClip` 改為 `TryAcquireClip`，取得者保存並釋放 lease。Addressables 的 `LoadClipAsync`／`ReleaseClip`／`preloadOnAwake` 已移除：一般播放由 Store 持有；預載使用 Controller 的具名群組；直接使用 Provider 時由呼叫端管理 lease。不再以 alias 快取代替所有權。
 
-`IAudioClipProviderRefresh`、`IAudioClipProviderChanges` 保留為可選能力；診斷可實作 `IAudioClipProviderDiagnostics`，核心不再依具體 Provider 型別決定載入或描述方式。Addressables 相關型別移入 `Controller.Audio.Addressables`，使用者 assembly 須明確增加該參照。
+`IAudioClipProviderRefresh`、`IAudioClipProviderChanges` 保留為可選能力；診斷可實作 `IAudioClipProviderDiagnostics`，核心不再依具體 Provider 型別決定載入或描述方式。Addressables 相關型別位於 `Esad.Audio.Addressables` assembly，使用者 assembly 須明確增加該參照。
 
 ## Catalog
 

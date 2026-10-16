@@ -2,9 +2,9 @@
 
 文件日期：2026-10-16
 
-文件版本：1.38
+文件版本：1.39
 
-狀態：完成 Catalog 索引競態、忽略規則與 README 狀態整理，本輪完整 PlayMode 403／403、EditMode 29／29 通過（見 5.33）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：根命名空間與組件改名為 `Esad.Audio`，套件名稱定為 `com.esad.audio-service`，本輪完整 PlayMode 403／403、EditMode 29／29 通過（見 5.34）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1387,6 +1387,26 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機完整 PlayMode **403／403**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；本機測試未修改。執行後工作目錄沒有未追蹤檔，Unity 重新產生的 `OSX.meta` 與 `.slnx` 都已被忽略。本機量測的 20 組配置事件中位數與 §5.32 相同。XML／log 位於 `work/stage-two-hardening/hygiene-{run1,editor-run1}-20261016.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
 
+### 5.34 命名空間與組件改名為 Esad.Audio
+
+記錄日期：2026-10-16。依使用者決定，為套件化先處理命名：根命名空間由 `Controller.Audio` 改為 `Esad.Audio`，從 `cb86cc5` 開始修改，未提交。`Controller` 過於通用，打包後容易和使用者專案的命名空間或型別撞名。
+
+| 項目 | 處理 |
+| --- | --- |
+| 命名空間 | `Controller.Audio`、`.Editor`、`.Samples` 改為 `Esad.Audio`、`Esad.Audio.Editor`、`Esad.Audio.Samples`；Addressables 整合的型別維持在根命名空間，避免 `.Addressables` 遮住 Unity 的 `Addressables` 類別 |
+| 組件 | 四個 asmdef 的名稱、彼此引用與檔名改為 `Esad.Audio`、`Esad.Audio.Editor`、`Esad.Audio.Addressables`、`Esad.Audio.Samples`；`.meta` 一起搬移，GUID 不變；`InternalsVisibleTo` 同步更新 |
+| 資產 | 場景與 Prefab 中 11 個 `m_EditorClassIdentifier` 更新為新的組件與命名空間，包括原本就過時的 4 個，§5.33 留待第三階段的這一項因此一併完成；`m_Script` GUID 不變 |
+| 文件 | README、Reference 與遷移指南改用新名稱，遷移指南新增 2026-10-16 段落；CHANGELOG 舊條目與本文件 §5 舊節屬於歷史紀錄，保留當時的名稱 |
+| 套件名稱 | 定為 `com.esad.audio-service`；`package.json` 在搬進套件資料夾時建立 |
+
+**命名的考量：** 命名空間不用 `Esad.AudioService`，因為主要入口類別就叫 `AudioService`，命名空間與其中的類別同名會讓使用者的程式解析錯。套件名稱依 UPM 規定全小寫，命名空間依 C# 慣例字首大寫。
+
+**易用性檢查：** 使用者程式需把 `using Controller.Audio;` 改成 `using Esad.Audio;`，以名稱引用組件的自訂 asmdef 要改名；遷移指南已列出對照。場景與 Prefab 不需重新設定。
+
+**維護性檢查：** 命名空間、組件名稱與 asmdef 檔名一致，序列化的 class 識別碼也與程式一致。
+
+**驗證：** Unity 6000.6.3f1 本機完整 PlayMode **403／403**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；本機測試只配合改 `using` 與 asmdef 引用。`Library/ScriptAssemblies` 只剩 `Esad.Audio*` 組件，執行測試後 Unity 沒有改寫其他資產。本機量測的 20 組配置事件中位數與 §5.33 相同。XML／log 位於 `work/stage-two-hardening/rename-{run1,editor-run1}-20261016.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1395,9 +1415,9 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 遷移清單須包含 `Assets/Resources/Audio/MasterMixer.mixer`、四個 Resources 範例素材、`Assets/AudioService/minigame_lose.mp3`、Addressables 群組／設定、Prefab 與 Build Settings 的場景引用。先以引用關係決定核心、可選 adapter 與 sample 的歸屬，再搬移檔案。範例失去隱含的 Resources／catalog 配置後仍須可依文件重建。
 
-Prefab 的 AudioController 與場景的 DebugMenu 留有舊 namespace 的 `m_EditorClassIdentifier`，但其 `m_Script` GUID 可對應現有腳本；此靜態差異不直接等於 Missing Script。加入 asmdef／變更 assembly 時，以 Unity 匯入與重新序列化結果驗證，避免只改字串卻破壞引用。
+§5.34 已把場景與 Prefab 的 `m_EditorClassIdentifier` 更新為 `Esad.Audio` 的組件與命名空間，`m_Script` GUID 不變。加入 asmdef／變更 assembly 時，以 Unity 匯入與重新序列化結果驗證，避免只改字串卻破壞引用。
 
-§5.18 已完成獨立 Addressables assembly、移除 Fallback 自動建立邏輯，以及未安裝 Addressables 的核心匯入／Player 建置與播放。第三階段仍須完成 adapter 的 UPM 交付；套件位置、名稱與 Git 安裝網址在正式整理時確定，並重新驗證乾淨專案的實際安裝流程。
+§5.18 已完成獨立 Addressables assembly、移除 Fallback 自動建立邏輯，以及未安裝 Addressables 的核心匯入／Player 建置與播放。第三階段仍須完成 adapter 的 UPM 交付；套件名稱已定為 `com.esad.audio-service`、根命名空間為 `Esad.Audio`（§5.34），套件位置與 Git 安裝網址在正式整理時確定，並重新驗證乾淨專案的實際安裝流程。
 
 示範專案可以保留自己的渲染與編輯器套件，音訊核心只宣告實際需要的依賴。
 
@@ -1553,7 +1573,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 正式工作副本 | 已由使用者指定；開工時只核對狀態 | `/Users/michael/Unity/Git Repo/unity-audio-service` |
 | Unity 與目標平台支援範圍 | 基準測試與第三階段 | 目前以 `6000.6.3f1` 補齊播放／建置驗證；其他版本與平台以實測納入 |
 | 資源預算與並發預設值 | 第二階段量測後 | 根據代表性場景設定，避免任意給值 |
-| 正式 API 與套件名稱 | 第二、第三階段 | 日常推薦 API 已實作為 `Controller.Audio.AudioService`（5.14）；套件名稱仍於第三階段確定 |
+| 正式 API 與套件名稱 | 第二、第三階段 | 日常推薦 API 為 `Esad.Audio.AudioService`（5.14 建立，5.34 改名）；套件名稱定為 `com.esad.audio-service`（5.34） |
 | 授權與發布形式 | 第三階段發布前 | 由專案擁有者選定，不預先套用授權 |
 
 ## 11. 完成狀態記錄
@@ -1597,6 +1617,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成播放槽方法化、Inspector 拆段、零碎語法與檔案組織整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.31。
 - [x] 完成冗長條件收尾：Catalog 版本、循環檢查、Start 守衛、範例與 Editor 條件命名；PlayMode 403／403、EditMode 29／29 通過，見 §5.32。
 - [x] 完成 Catalog 索引競態修正、`.gitignore` 補規則與 README 狀態整理；PlayMode 403／403、EditMode 29／29 通過，見 §5.33。
+- [x] 完成根命名空間與組件改名為 `Esad.Audio`，套件名稱定為 `com.esad.audio-service`；PlayMode 403／403、EditMode 29／29 通過，見 §5.34。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1653,3 +1674,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.36 | 2026-10-15 | SlotState 改由具名操作變更；Inspector 拆段；Alive、Fallback、Store、Addressables、AudioImportTools、Resources 與引擎的零碎整理；公開列舉與介面歸位；PlayMode 402／402、EditMode 29／29 通過，見 §5.31 |
 | 1.37 | 2026-10-15 | 冗長條件收尾：RevisionOf、Contains 提前 return、CanStart、範例 IsCurrent、Editor 聽者判斷；已綁定 Catalog 被銷毀時刷新一次；PlayMode 403／403、EditMode 29／29 通過，見 §5.32 |
 | 1.38 | 2026-10-16 | Catalog 索引只讀一次 entries 並使用自建索引；.gitignore 補 *.slnx 與 OSX.meta；README 狀態改為指向 CHANGELOG 與遷移指南；記錄留待第三階段的文件與資產整理；PlayMode 403／403、EditMode 29／29 通過，見 §5.33 |
+| 1.39 | 2026-10-16 | 根命名空間、組件與 asmdef 檔名改為 Esad.Audio；更新 11 個序列化的 class 識別碼；套件名稱定為 com.esad.audio-service；PlayMode 403／403、EditMode 29／29 通過，見 §5.34 |

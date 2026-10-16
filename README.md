@@ -1,11 +1,11 @@
 # Unity Audio Service
 
-以簡單、好用、操作直覺為目標的 2D 音訊服務。日常程式使用 `Controller.Audio.AudioService`：播放 BGM、音效與語音，取得 handle 控制單一聲音，或調整玩家音量。
+以簡單、好用、操作直覺為目標的 2D 音訊服務。日常程式使用 `Esad.Audio.AudioService`：播放 BGM、音效與語音，取得 handle 控制單一聲音，或調整玩家音量。
 
 後續修正、重構、優化、擴充與套件化均遵循 [固定易用性準則](unity-audio-service-improvement-plan.md#21-後續修改的固定易用性準則) 與 [固定程式碼維護準則](unity-audio-service-improvement-plan.md#22-後續修改的固定程式碼維護準則)：保持簡單、好用、操作直覺，並使程式碼盡可能精簡優雅，移除或優化可能造成技術債的程式碼。
 
 ```csharp
-using Controller.Audio;
+using Esad.Audio;
 
 AudioService.PlayBgm("ukulele_song");
 AudioService.PlaySfx("minigame_win");
@@ -34,7 +34,7 @@ var voice = AudioService.PlayVoice("minigame_drink");
 4. 建立 `FirstSound.cs`，貼上下方程式並掛到場景物件，按 Play。
 
 ```csharp
-using Controller.Audio;
+using Esad.Audio;
 using UnityEngine;
 
 public class FirstSound : MonoBehaviour
