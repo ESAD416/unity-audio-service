@@ -1,5 +1,10 @@
 # 變更紀錄
 
+## Unreleased - README 加入三張 Mermaid 圖（2026-10-16）
+
+- README 加入呼叫架構、handle 狀態與「沒有聲音時」檢查順序三張 Mermaid 圖。GitHub 會直接畫成圖；不支援 Mermaid 的檢視器仍顯示可讀的文字。
+- 三張圖以 Mermaid 11 實際繪製確認，沒有語法錯誤；程式與資產沒有變更。詳見改善計畫 §5.36。
+
 ## Unreleased - 預設 Mixer 改用套件專屬的 Resources 路徑（2026-10-16）
 
 - `MasterMixer.mixer` 由 `Assets/Resources/Audio/` 移到模組內的 `Runtime/Resources/Esad.Audio/`，未指定 Mixer 時改從 `Esad.Audio/MasterMixer` 載入。Resources 路徑是全專案共用的，原本的 `Audio/MasterMixer` 打包成套件後可能和使用者自己的 Mixer 互相蓋掉，也和 Resources Provider 讀取使用者音效的 `Audio/` 混在一起。

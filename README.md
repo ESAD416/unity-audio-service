@@ -15,6 +15,27 @@ var voice = AudioService.PlayVoice("minigame_drink");
 
 以上呼叫放在 **Start 或之後**，並先在場景放入下方的 AudioCtrl Prefab。一般播放不需要手動初始化、預熱或預載。
 
+程式只接觸 `AudioService`；素材來源、音量保存與 Mixer 都由場景中的 AudioCtrl Prefab 負責：
+
+```mermaid
+flowchart LR
+    Code["你的程式"]
+    Service["AudioService"]
+    subgraph Prefab["AudioCtrl Prefab"]
+        Controller["AudioController"]
+        Engine["播放引擎<br/>替換、淡變、並發上限"]
+        Source["素材來源<br/>Resources／Addressables"]
+        Settings["音量設定<br/>PlayerPrefs"]
+        Mixer["Mixer<br/>MasterMixer"]
+    end
+    Code -->|"Play／Stop／音量"| Service
+    Service --> Controller
+    Controller --> Engine
+    Controller --> Source
+    Controller --> Settings
+    Controller --> Mixer
+```
+
 ## 先試一次
 
 1. 開啟 [AudioQuickStart 場景](Assets/AudioService/Samples/AudioQuickStart.unity)，按 Play。
@@ -85,6 +106,20 @@ var wind = AudioService.PlaySfx("wind", new PlayOptions
 // 不再需要這個循環時：wind.Stop();
 ```
 
+一個 handle 從播放到結束的狀態如下；結束後 `Completed` 事件會帶回結果（Completed、Stopped、Cancelled、Failed 或 Rejected）：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Loading: 呼叫 Play 方法
+    Loading --> Playing: 素材就緒
+    Playing --> Paused: Pause()
+    Paused --> Playing: Resume()
+    Playing --> Finished: 播完、Stop() 或被替換
+    Paused --> Finished: Stop()
+    Loading --> Finished: 失敗、被拒或取消
+    Finished --> [*]: Completed 事件帶回結果
+```
+
 `PlayOptions` 是額外需求才使用的設定。BGM 轉場可設定 `FadeOutSeconds` 與 `FadeInSeconds`，目前為先淡出再淡入；轉場還在淡出時被取消或替換，目前音樂會從當下音量繼續，不會跳回原音量。停止單次播放的時長傳給 `handle.Stop(seconds)`。
 
 ## 停止、音量與淡出的範圍
@@ -105,6 +140,17 @@ var wind = AudioService.PlaySfx("wind", new PlayOptions
 `Time.timeScale = 0` 不會自動呼叫音訊暫停。暫停時仍需播放的 UI 音效，可在 `PlayOptions` 設 `IgnoreGamePause = true`。
 
 ## 沒有聲音時
+
+依下列順序檢查：
+
+```mermaid
+flowchart TD
+    Start["聽不到聲音"] --> HasCtrl{"場景有啟用的 AudioCtrl？"}
+    HasCtrl -->|"沒有"| AddCtrl["放入 AudioCtrl.prefab，<br/>從 Start 或之後呼叫"]
+    HasCtrl -->|"有"| Checks["看 AudioCtrl Inspector 的<br/>Audio checks"]
+    Checks -->|"有提示"| Fix["依提示處理：<br/>聽者、Mixer、靜音、<br/>音量、FadeBus、暫停"]
+    Checks -->|"沒有提示"| Console["看 Console 的失敗訊息：<br/>類別、ID、原因、查找路徑"]
+```
 
 先選取場景中的 **AudioCtrl → AudioController → Audio checks**。這裡會集中提示缺少／重複的有效 AudioListener、Mixer 配置問題；Play Mode 時也會顯示靜音、零音量、FadeBus 歸零與暫停的原因及恢復方式。提示會自動更新，也可按 `Refresh audio checks`。檢查不會自動修改設定；靜音與暫停可能是你刻意的操作。
 

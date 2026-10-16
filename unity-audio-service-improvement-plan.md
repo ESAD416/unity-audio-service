@@ -2,9 +2,9 @@
 
 文件日期：2026-10-16
 
-文件版本：1.40
+文件版本：1.41
 
-狀態：預設 Mixer 改用套件專屬的 Resources 路徑，本輪完整 PlayMode 404／404、EditMode 29／29 通過（見 5.35）；根命名空間與套件名稱已定（見 5.34）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：README 加入三張 Mermaid 圖（見 5.36）；最近一次完整測試為 PlayMode 404／404、EditMode 29／29（見 5.35）；根命名空間與套件名稱已定（見 5.34）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1426,6 +1426,20 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機完整 PlayMode **404／404**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤。新增本機測試 `DefaultMixerPathTests`：用程式建立的 Controller 會載入套件的 MasterMixer 並通過 Mixer 驗證，`Audio/MasterMixer` 不再回傳任何資產；另把本機測試中 4 處舊路徑改為新路徑。本機量測的 20 組配置事件中位數與 §5.34 相同。XML／log 位於 `work/stage-two-hardening/mixerpath-{run1,editor-run1}-20261016.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
 
+### 5.36 README 加入三張 Mermaid 圖
+
+記錄日期：2026-10-16。依使用者要求，把使用說明圖解頁中的三張圖以 Mermaid 寫進 README，從 `5b9b339` 開始修改，未提交。程式、資產與其他文件不變。
+
+| 圖 | 位置 | 類型 |
+| --- | --- | --- |
+| 呼叫架構：程式 → AudioService → AudioCtrl Prefab（播放引擎、素材來源、音量設定、Mixer） | 開頭的程式範例之後 | flowchart |
+| handle 狀態：Loading → Playing ⇄ Paused → Finished | 「播放規則只有一套」的範例之後 | stateDiagram-v2 |
+| 沒有聲音時的檢查順序：AudioCtrl → Audio checks → Console | 「沒有聲音時」開頭 | flowchart |
+
+**選擇 Mermaid 的理由：** GitHub 原生繪製並跟隨深淺主題；純文字可以 diff，內容改動時不必重新匯出圖片；不支援的檢視器仍顯示可讀的原始碼。HTML 圖解頁無法直接放進 README：GitHub 會移除樣式與指令碼，Unity Package Manager 也不顯示 README。
+
+**驗證：** 以 Mermaid 11.4.1 在內建瀏覽器繪製三張圖，全部成功；調整兩處自動換行不佳的文字後再確認一次。本輪只改文件，未執行 Unity 測試。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1638,6 +1652,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成 Catalog 索引競態修正、`.gitignore` 補規則與 README 狀態整理；PlayMode 403／403、EditMode 29／29 通過，見 §5.33。
 - [x] 完成根命名空間與組件改名為 `Esad.Audio`，套件名稱定為 `com.esad.audio-service`；PlayMode 403／403、EditMode 29／29 通過，見 §5.34。
 - [x] 完成預設 Mixer 改用套件專屬的 Resources 路徑；PlayMode 404／404、EditMode 29／29 通過，見 §5.35。
+- [x] README 加入呼叫架構、handle 狀態與檢查順序三張 Mermaid 圖，見 §5.36。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1696,3 +1711,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.38 | 2026-10-16 | Catalog 索引只讀一次 entries 並使用自建索引；.gitignore 補 *.slnx 與 OSX.meta；README 狀態改為指向 CHANGELOG 與遷移指南；記錄留待第三階段的文件與資產整理；PlayMode 403／403、EditMode 29／29 通過，見 §5.33 |
 | 1.39 | 2026-10-16 | 根命名空間、組件與 asmdef 檔名改為 Esad.Audio；更新 11 個序列化的 class 識別碼；套件名稱定為 com.esad.audio-service；PlayMode 403／403、EditMode 29／29 通過，見 §5.34 |
 | 1.40 | 2026-10-16 | MasterMixer 移到模組的 Runtime/Resources/Esad.Audio，後備載入改用 Esad.Audio/MasterMixer；PlayMode 404／404、EditMode 29／29 通過，見 §5.35 |
+| 1.41 | 2026-10-16 | README 加入三張 Mermaid 圖；只改文件，見 §5.36 |
