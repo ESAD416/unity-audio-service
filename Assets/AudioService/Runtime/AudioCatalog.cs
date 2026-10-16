@@ -94,33 +94,36 @@ namespace Controller.Audio
             return copy;
         }
 
-        internal void RebuildIndex()
+        internal void RebuildIndex() => index = BuildIndex();
+
+        // Serialization callbacks may replace the entries or clear the index on another
+        // thread. Build from one read of the entries, and let callers publish the finished
+        // lookup in one assignment and keep using their own reference.
+        private Lookup BuildIndex()
         {
+            var source = entries ?? Array.Empty<AudioClipAddress>();
             int count = 0, capacity = 0;
-            if (entries != null)
-                foreach (var entry in entries)
-                    if (entry != null)
-                    {
-                        count++;
-                        capacity += 1 + (entry.Aliases?.Length ?? 0);
-                    }
+            foreach (var entry in source)
+                if (entry != null)
+                {
+                    count++;
+                    capacity += 1 + (entry.Aliases?.Length ?? 0);
+                }
             var next = new Lookup(count, capacity);
             int row = 0;
-            if (entries != null)
-                foreach (var entry in entries)
-                {
-                    if (entry == null)
-                        continue;
-                    next.Records[row] = new ResolvedAudioClip(entry.Id, entry.Category, entry.ResourcesKey, entry.AddressablesKey, entry.MaxInstances);
-                    Add(entry.Id, entry.Category, row);
-                    if (entry.Aliases != null)
-                        foreach (var alias in entry.Aliases)
-                            Add(alias, entry.Category, row);
-                    row++;
-                }
+            foreach (var entry in source)
+            {
+                if (entry == null)
+                    continue;
+                next.Records[row] = new ResolvedAudioClip(entry.Id, entry.Category, entry.ResourcesKey, entry.AddressablesKey, entry.MaxInstances);
+                Add(entry.Id, entry.Category, row);
+                if (entry.Aliases != null)
+                    foreach (var alias in entry.Aliases)
+                        Add(alias, entry.Category, row);
+                row++;
+            }
 
-            // Publish records and alias indices together only after the snapshot is complete.
-            index = next;
+            return next;
             void Add(string key, AudioCategory category, int record)
             {
                 // Keep the first match, including an alias on an entry with an invalid
@@ -138,8 +141,8 @@ namespace Controller.Audio
             var current = index;
             if (current == null)
             {
-                RebuildIndex();
-                current = index;
+                current = BuildIndex();
+                index = current;
             }
             if (!current.Keys.TryGetValue((category, id.Value), out int row))
                 return false;
