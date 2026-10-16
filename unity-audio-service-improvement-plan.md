@@ -1,10 +1,10 @@
 # Unity Audio Service 改善與成熟化計劃
 
-文件日期：2026-10-15
+文件日期：2026-10-16
 
-文件版本：1.37
+文件版本：1.38
 
-狀態：完成冗長條件收尾，並修正已綁定 Catalog 被銷毀時不刷新的情況，本輪完整 PlayMode 403／403、EditMode 29／29 通過（見 5.32）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：完成 Catalog 索引競態、忽略規則與 README 狀態整理，本輪完整 PlayMode 403／403、EditMode 29／29 通過（見 5.33）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1367,6 +1367,26 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機完整 PlayMode **403／403**（含新增 1 項）、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；既有測試未修改。本機量測的 20 組配置事件中位數與 §5.31 相同。XML／log 位於 `work/stage-two-hardening/conditions-{run1,editor-run1}-20261015.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
 
+### 5.33 Catalog 索引競態、忽略規則與 README 狀態
+
+記錄日期：2026-10-16。依使用者指定，完成技術債檢視中「值得現在做」的三項，從 `1d29a20` 開始修改，未提交。公開 API、Prefab、序列化欄位與診斷文字不變。
+
+| 項目 | 處理 |
+| --- | --- |
+| 1 Catalog 索引 | `RebuildIndex` 改為發布 `BuildIndex()` 的結果；`BuildIndex` 只讀一次 `entries`，兩次走訪都用同一個陣列；`TryResolve` 用自己建好的索引查找，不再重新讀欄位 |
+| 2 忽略規則 | `.gitignore` 加入 `*.slnx` 與 `/[Aa]ssets/AddressableAssetsData/OSX.meta`；其他平台的資料夾出現時再補 |
+| 3 README | 「專案狀態」移除停在 2026-10-14 的「最近一輪」段落與當時的測試數字，改為指向 CHANGELOG、遷移指南與改善計畫；仍然有效的「視窗畫面、人工操作與聽感未驗收」移到第一段 |
+
+**第 1 項的情境：** Controller 與 Catalog 的註解都假設序列化回呼可能在其他執行緒執行。原本 `TryResolve` 在重建後重新讀 `index`，若剛好被 `OnAfterDeserialize` 清掉，下一行就會拋 NullReferenceException；`RebuildIndex` 先數筆數再填資料，兩次之間 `entries` 被換掉就可能超出陣列範圍。實際發生的機率很低，也無法穩定重現，所以沒有新增壓力測試，改以既有 Catalog 測試確認功能不變。
+
+**留待第三階段：** CHANGELOG 的 Unreleased 區段合併成版本條目；改善計畫 §5 的逐輪紀錄移到獨立的歷史檔；重新序列化 AudioSampleScene 與兩個 Prefab，更新 4 個過時的 `m_EditorClassIdentifier`；整理宿主專案中與音訊無關的套件。另有兩個小項：`AudioSourcePool.DestroyAll` 一併清空 `all` 與 `Active`，以及視需要把匯流排邏輯抽成 `AudioBuses`。
+
+**易用性檢查：** 使用流程與公開 API 不變；README 不再出現會過時的「最近一輪」敘述。
+
+**維護性檢查：** 索引只在一處建立，並以一次賦值發布；`entries` 的 null 檢查只剩一處。忽略規則讓每次執行 Unity 後的工作目錄保持乾淨，不必再手動移走產生的檔案。
+
+**驗證：** Unity 6000.6.3f1 本機完整 PlayMode **403／403**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；本機測試未修改。執行後工作目錄沒有未追蹤檔，Unity 重新產生的 `OSX.meta` 與 `.slnx` 都已被忽略。本機量測的 20 組配置事件中位數與 §5.32 相同。XML／log 位於 `work/stage-two-hardening/hygiene-{run1,editor-run1}-20261016.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
@@ -1576,6 +1596,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成引擎 Play 來源參數、Finish 旗標、SetVolume 拆分與開發版記錄規則集中；PlayMode 402／402、EditMode 29／29 通過，見 §5.30。
 - [x] 完成播放槽方法化、Inspector 拆段、零碎語法與檔案組織整理；PlayMode 402／402、EditMode 29／29 通過，見 §5.31。
 - [x] 完成冗長條件收尾：Catalog 版本、循環檢查、Start 守衛、範例與 Editor 條件命名；PlayMode 403／403、EditMode 29／29 通過，見 §5.32。
+- [x] 完成 Catalog 索引競態修正、`.gitignore` 補規則與 README 狀態整理；PlayMode 403／403、EditMode 29／29 通過，見 §5.33。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1631,3 +1652,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.35 | 2026-10-15 | 引擎 Play 拆成 clip／位址兩個多載並移除過時的 id；Finish 旗標拆成 Retire；SetVolume 抽出 StoreVolume；開發版記錄規則集中；PlayMode 402／402、EditMode 29／29 通過，見 §5.30 |
 | 1.36 | 2026-10-15 | SlotState 改由具名操作變更；Inspector 拆段；Alive、Fallback、Store、Addressables、AudioImportTools、Resources 與引擎的零碎整理；公開列舉與介面歸位；PlayMode 402／402、EditMode 29／29 通過，見 §5.31 |
 | 1.37 | 2026-10-15 | 冗長條件收尾：RevisionOf、Contains 提前 return、CanStart、範例 IsCurrent、Editor 聽者判斷；已綁定 Catalog 被銷毀時刷新一次；PlayMode 403／403、EditMode 29／29 通過，見 §5.32 |
+| 1.38 | 2026-10-16 | Catalog 索引只讀一次 entries 並使用自建索引；.gitignore 補 *.slnx 與 OSX.meta；README 狀態改為指向 CHANGELOG 與遷移指南；記錄留待第三階段的文件與資產整理；PlayMode 403／403、EditMode 29／29 通過，見 §5.33 |

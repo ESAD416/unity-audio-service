@@ -1,5 +1,12 @@
 # 變更紀錄
 
+## Unreleased - Catalog 索引競態、忽略規則與 README 狀態（2026-10-16）
+
+- `AudioCatalog` 建立索引時只讀一次 entries，查找時使用自己建好的索引；序列化回呼在其他執行緒清掉索引或換掉 entries 時，`TryResolve` 不會再拋 NullReferenceException 或超出陣列範圍。一般情況下的查找結果與配置不變。
+- `.gitignore` 加入 Unity 6 的 `*.slnx` 與 Addressables 平台資料夾的 `OSX.meta`，執行 Unity 後不再留下未追蹤檔。
+- README 的專案狀態改為指向 CHANGELOG、遷移指南與改善計畫，不再寫「最近一輪」的內容與測試數字。
+- 本機 PlayMode 403／403、EditMode 29／29 通過，配置事件與上一輪相同；本輪未重跑 macOS Player。詳見改善計畫 §5.33。
+
 ## Unreleased - 冗長條件收尾（2026-10-15）
 
 - Controller 以 `RevisionOf` 統一「沒有 Catalog 時版本視為 0」，`SyncCatalog` 的條件不再需要括號包住的子句。**行為差異：** 已綁定的 Catalog 在執行中被 Destroy 時，下一次更新會刷新一次查找，與把 Catalog 設為 null 的處理一致；原本不刷新，快取會留著依舊對應找到的素材。
