@@ -2,9 +2,9 @@
 
 文件日期：2026-10-16
 
-文件版本：1.39
+文件版本：1.40
 
-狀態：根命名空間與組件改名為 `Esad.Audio`，套件名稱定為 `com.esad.audio-service`，本輪完整 PlayMode 403／403、EditMode 29／29 通過（見 5.34）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
+狀態：預設 Mixer 改用套件專屬的 Resources 路徑，本輪完整 PlayMode 404／404、EditMode 29／29 通過（見 5.35）；根命名空間與套件名稱已定（見 5.34）。前輪完整驗證為 367 項 PlayMode、macOS Player 無圖形／批次 Metal 各 288 項，以及 Resources-only 獨立建置與播放／準備（見 5.21）。UPM 交付、視窗畫面、人工操作與聽感未驗收
 
 本文件整合專案審查、三階段改善目標，以及開源專案的參考方式。目標是把目前的輕量音訊模組改善成播放可靠、容易重用、能以套件交付的 Unity 音訊服務。使用者已明確指定「簡單、好用、操作直覺」為產品目標：基本播放有單一推薦路線，控制範圍與語音替換規則明確，效能與資源管理能力按需求使用。
 
@@ -1407,13 +1407,32 @@ XML／log 位於 `work/stage-two-hardening/review-fixes-{baseline,run1,run2,fina
 
 **驗證：** Unity 6000.6.3f1 本機完整 PlayMode **403／403**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤；本機測試只配合改 `using` 與 asmdef 引用。`Library/ScriptAssemblies` 只剩 `Esad.Audio*` 組件，執行測試後 Unity 沒有改寫其他資產。本機量測的 20 組配置事件中位數與 §5.33 相同。XML／log 位於 `work/stage-two-hardening/rename-{run1,editor-run1}-20261016.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
 
+### 5.35 預設 Mixer 改用套件專屬的 Resources 路徑
+
+記錄日期：2026-10-16。依使用者選定的做法（保留後備載入、改用獨特路徑），從 `9a9ca6a` 開始修改，未提交。
+
+| 項目 | 處理 |
+| --- | --- |
+| 資產位置 | `MasterMixer.mixer` 由 `Assets/Resources/Audio/` 移到 `Assets/AudioService/Runtime/Resources/Esad.Audio/`，`.meta` 一起搬，GUID 不變；新增的兩個資料夾 meta 由 Unity 產生 |
+| 後備載入 | 新增 `DefaultMixerPath = "Esad.Audio/MasterMixer"`；未指定 Mixer 且 `loadDefaultMixer` 開啟時從這裡載入 |
+
+**問題：** Resources 路徑是全專案共用的。打包後套件的 `Resources/Audio/MasterMixer` 可能和使用者自己的同名 Mixer 互相蓋掉（`Resources.Load` 遇到重複路徑時回傳哪一個沒有保證），也和 Resources Provider 讀取使用者音效的根目錄 `Audio/` 混在一起。兩個 Prefab 本來就以 GUID 直接引用 Mixer，問題只出在後備載入。
+
+**不做：** 移除後備載入與 `loadDefaultMixer`。那會讓用程式建立的 Controller 改用音源音量，也讓 Inspector 少一個設定。
+
+**易用性檢查：** Prefab 與用程式建立的 Controller 行為都不變；直接用舊路徑載入 Mixer 的自訂程式需改路徑，遷移指南已註明。
+
+**維護性檢查：** 套件擁有的資產放在模組資料夾內，之後搬進套件時會跟著走；§6.1 的遷移清單少一項模組外的資產。
+
+**驗證：** Unity 6000.6.3f1 本機完整 PlayMode **404／404**、EditMode **29／29** 一次通過，失敗／跳過為零，編譯沒有 C# 警告或錯誤。新增本機測試 `DefaultMixerPathTests`：用程式建立的 Controller 會載入套件的 MasterMixer 並通過 Mixer 驗證，`Audio/MasterMixer` 不再回傳任何資產；另把本機測試中 4 處舊路徑改為新路徑。本機量測的 20 組配置事件中位數與 §5.34 相同。XML／log 位於 `work/stage-two-hardening/mixerpath-{run1,editor-run1}-20261016.*`。本輪未重跑 macOS Player、Resources-only 獨立建置與 bytes／CPU 量測。
+
 ## 6. 第三階段：對外套件
 
 ### 6.1 套件結構與依賴
 
 將核心模組與展示專案分離，形成可由 UPM 安裝的套件。整理 Runtime、Editor、Samples~ 與文件，保留 Unity 資產 GUID 及必要的序列化相容性。本機回歸測試保留在受忽略的宿主專案測試目錄，不隨 UPM 套件發布，也不因套件化而移到會被 Git 追蹤的位置。
 
-遷移清單須包含 `Assets/Resources/Audio/MasterMixer.mixer`、四個 Resources 範例素材、`Assets/AudioService/minigame_lose.mp3`、Addressables 群組／設定、Prefab 與 Build Settings 的場景引用。先以引用關係決定核心、可選 adapter 與 sample 的歸屬，再搬移檔案。範例失去隱含的 Resources／catalog 配置後仍須可依文件重建。
+預設 Mixer 已移入模組的 `Runtime/Resources/Esad.Audio/`（§5.35），會隨模組一起搬。遷移清單須包含四個 Resources 範例素材、`Assets/AudioService/minigame_lose.mp3`、Addressables 群組／設定、Prefab 與 Build Settings 的場景引用。先以引用關係決定核心、可選 adapter 與 sample 的歸屬，再搬移檔案。範例失去隱含的 Resources／catalog 配置後仍須可依文件重建。
 
 §5.34 已把場景與 Prefab 的 `m_EditorClassIdentifier` 更新為 `Esad.Audio` 的組件與命名空間，`m_Script` GUID 不變。加入 asmdef／變更 assembly 時，以 Unity 匯入與重新序列化結果驗證，避免只改字串卻破壞引用。
 
@@ -1618,6 +1637,7 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 - [x] 完成冗長條件收尾：Catalog 版本、循環檢查、Start 守衛、範例與 Editor 條件命名；PlayMode 403／403、EditMode 29／29 通過，見 §5.32。
 - [x] 完成 Catalog 索引競態修正、`.gitignore` 補規則與 README 狀態整理；PlayMode 403／403、EditMode 29／29 通過，見 §5.33。
 - [x] 完成根命名空間與組件改名為 `Esad.Audio`，套件名稱定為 `com.esad.audio-service`；PlayMode 403／403、EditMode 29／29 通過，見 §5.34。
+- [x] 完成預設 Mixer 改用套件專屬的 Resources 路徑；PlayMode 404／404、EditMode 29／29 通過，見 §5.35。
 - [ ] 新範例與 Inspector 的視窗畫面／人工操作及新使用者任務驗證（前輪 Mac 鎖定，本輪桌面工具連線逾時，尚未完成，見 5.14、5.15）。
 
 ## 12. 原專案與 Unity 技術依據
@@ -1675,3 +1695,4 @@ Addressables 驗證分為編輯器資產模式與實際 content build／Player �
 | 1.37 | 2026-10-15 | 冗長條件收尾：RevisionOf、Contains 提前 return、CanStart、範例 IsCurrent、Editor 聽者判斷；已綁定 Catalog 被銷毀時刷新一次；PlayMode 403／403、EditMode 29／29 通過，見 §5.32 |
 | 1.38 | 2026-10-16 | Catalog 索引只讀一次 entries 並使用自建索引；.gitignore 補 *.slnx 與 OSX.meta；README 狀態改為指向 CHANGELOG 與遷移指南；記錄留待第三階段的文件與資產整理；PlayMode 403／403、EditMode 29／29 通過，見 §5.33 |
 | 1.39 | 2026-10-16 | 根命名空間、組件與 asmdef 檔名改為 Esad.Audio；更新 11 個序列化的 class 識別碼；套件名稱定為 com.esad.audio-service；PlayMode 403／403、EditMode 29／29 通過，見 §5.34 |
+| 1.40 | 2026-10-16 | MasterMixer 移到模組的 Runtime/Resources/Esad.Audio，後備載入改用 Esad.Audio/MasterMixer；PlayMode 404／404、EditMode 29／29 通過，見 §5.35 |

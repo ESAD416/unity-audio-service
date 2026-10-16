@@ -38,7 +38,7 @@
 
 - **DebugMenu 警告**：播放、停止與音量項目改走 `AudioService`。場景沒有 AudioCtrl 或它尚未就緒時，改由 `AudioService` 提示修正步驟，同一原因只提示一次，不再每次顯示 `AudioController.Instance is null`；AudioCtrl 停用時，音量項目也改為提示而不寫入。key 空白時一律提示 `<名稱> key is empty.`，「Prepare and Play BGM」也會提示（原本不提示）。
 
-## 2026-10-16 命名空間與組件改名
+## 2026-10-16 命名空間、組件與預設 Mixer 路徑
 
 為了打包成 UPM 套件，根命名空間由 `Controller.Audio` 改為 `Esad.Audio`，避免通用的 `Controller` 和使用者專案撞名；組件與 asmdef 檔名一併改名。腳本與資產的 GUID 都沒有改變，場景與 Prefab 的引用不受影響。
 
@@ -49,6 +49,8 @@
 | 組件 `Controller.Audio`、`Controller.Audio.Editor`、`Controller.Audio.Addressables`、`Controller.Audio.Samples` | `Esad.Audio`、`Esad.Audio.Editor`、`Esad.Audio.Addressables`、`Esad.Audio.Samples` |
 
 自訂 asmdef 若以名稱引用這些組件，要改成新名稱；以 GUID 引用的不必改。完整型別名稱（例如 `Controller.Audio.AudioService`）同樣換成 `Esad.Audio.AudioService`。
+
+預設 Mixer 也移到模組內的 `Assets/AudioService/Runtime/Resources/Esad.Audio/MasterMixer.mixer`。Prefab 以 GUID 引用它，不需處理；若自訂程式用 `Resources.Load("Audio/MasterMixer")` 取得這個 Mixer，改用 `Resources.Load("Esad.Audio/MasterMixer")`，或直接在 Inspector 引用資產。
 
 ## 播放與控制
 

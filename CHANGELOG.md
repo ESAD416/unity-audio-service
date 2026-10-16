@@ -1,5 +1,11 @@
 # 變更紀錄
 
+## Unreleased - 預設 Mixer 改用套件專屬的 Resources 路徑（2026-10-16）
+
+- `MasterMixer.mixer` 由 `Assets/Resources/Audio/` 移到模組內的 `Runtime/Resources/Esad.Audio/`，未指定 Mixer 時改從 `Esad.Audio/MasterMixer` 載入。Resources 路徑是全專案共用的，原本的 `Audio/MasterMixer` 打包成套件後可能和使用者自己的 Mixer 互相蓋掉，也和 Resources Provider 讀取使用者音效的 `Audio/` 混在一起。
+- Prefab 以 GUID 引用 Mixer，搬移後不受影響；用程式建立的 Controller 照樣會拿到預設 Mixer。以 `Resources.Load("Audio/MasterMixer")` 自行取得這個 Mixer 的程式需改用新路徑，見[遷移指南](Documentation/Migration.md)。
+- 本機 PlayMode 404／404（新增 1 項預設 Mixer 測試）、EditMode 29／29 通過，配置事件與上一輪相同；本輪未重跑 macOS Player。詳見改善計畫 §5.35。
+
 ## Unreleased - 命名空間與組件改名為 Esad.Audio（2026-10-16）
 
 - **破壞性：** 根命名空間由 `Controller.Audio` 改為 `Esad.Audio`，Editor 與範例改為 `Esad.Audio.Editor`、`Esad.Audio.Samples`；四個組件與 asmdef 檔名一併改為 `Esad.Audio`、`Esad.Audio.Editor`、`Esad.Audio.Addressables`、`Esad.Audio.Samples`。`Controller` 太通用，打包成套件後容易和使用者專案撞名。處理方式見[遷移指南](Documentation/Migration.md)。
