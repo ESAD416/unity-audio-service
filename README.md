@@ -146,8 +146,6 @@ Inspector 的 `Max Concurrent Sounds` 是 BGM、SFX、Voice 合計的並發請�
 
 ## 專案狀態
 
-目前是 Unity 專案，尚未完成 UPM 套件交付。驗證環境為 Unity 6000.6.3f1、Addressables 2.11.2、Test Framework 1.8.0。核心不再引用 Addressables；可選整合位於 `Integrations/Addressables`。範例不代表已驗證其他版本或平台。
+目前是 Unity 專案，尚未完成 UPM 套件交付。驗證環境為 Unity 6000.6.3f1、Addressables 2.11.2、Test Framework 1.8.0。核心不再引用 Addressables；可選整合位於 `Integrations/Addressables`。範例不代表已驗證其他版本或平台。視窗畫面、人工操作與聽感仍未驗收，也尚未進行新使用者操作研究。
 
-最近一輪（2026-10-14）依專案審查修正七項：取消 BGM 轉場時目前音樂不再瞬間回到全音量；非疊加換場自動釋放一般播放快取；音訊裝置變更後循環聲音自動重播；Provider 例外會記錄 stack trace；設定不同的重複 AudioController 會提示；播放與停止入口改為 `PlayIndependent`、`StopAll`，並移除 `Preload` 與 `FadeBus(stopAfter)`；欄位名稱與程式格式整理。本機 PlayMode 395／395、EditMode 28／28 通過；本輪未重跑 macOS Player 與 Resources-only 獨立建置，前輪結果見改善計畫 §5.21。破壞性變更見[遷移指南](Documentation/Migration.md#2026-10-14-審查修正)。視窗畫面、人工操作與聽感仍未驗收，也尚未進行新使用者操作研究。
-
-可靠性、效能與本輪使用流程驗證見[改善計畫](unity-audio-service-improvement-plan.md)，相容性紀錄見 [CHANGELOG](CHANGELOG.md)。入門場景和範例會隨專案提供；本機測試及工具依既有規則留在受 Git 忽略的 Tests／Tools／work。
+每次變更的內容記在 [CHANGELOG](CHANGELOG.md)，升級時要調整的地方記在[遷移指南](Documentation/Migration.md)，可靠性、效能與使用流程的驗證紀錄見[改善計畫](unity-audio-service-improvement-plan.md)。入門場景和範例會隨專案提供；本機測試及工具依既有規則留在受 Git 忽略的 Tests／Tools／work。
