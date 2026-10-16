@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     /// <summary>Replace the dialogue slot, or play a voice independently of that slot.</summary>
     public enum VoicePlaybackMode { Replace, Overlap }

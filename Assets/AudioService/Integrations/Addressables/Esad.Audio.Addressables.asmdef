@@ -1,6 +1,6 @@
 {
-  "name": "Controller.Audio.Addressables",
-  "references": ["Controller.Audio", "Unity.Addressables", "Unity.ResourceManager"],
+  "name": "Esad.Audio.Addressables",
+  "references": ["Esad.Audio", "Unity.Addressables", "Unity.ResourceManager"],
   "defineConstraints": ["AUDIO_ADDRESSABLES"],
   "versionDefines": [
     { "name": "com.unity.addressables", "expression": "0.0.0", "define": "AUDIO_ADDRESSABLES" }

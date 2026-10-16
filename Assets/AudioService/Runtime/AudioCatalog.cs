@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Serialization;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     [Serializable]
     public sealed class AudioClipAddress

@@ -2,7 +2,7 @@ using System;
 using UnityEngine;
 using UnityEngine.Serialization;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     [DisallowMultipleComponent]
     public class AudioSettingsPlayerPrefs : MonoBehaviour, IAudioSettingsHandler, IAudioSettingsMaintenance

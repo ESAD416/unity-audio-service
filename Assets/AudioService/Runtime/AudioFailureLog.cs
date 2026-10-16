@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     // Failure-only, bounded development logging. Successful playback does not
     // build diagnostic strings or query providers for diagnostic information.

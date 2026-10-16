@@ -4,7 +4,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Audio;
 
-namespace Controller.Audio.Editor
+namespace Esad.Audio.Editor
 {
     public readonly struct AudioSetupIssue
     {

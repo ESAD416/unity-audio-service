@@ -1,0 +1,6 @@
+{
+  "name": "Esad.Audio.Editor",
+  "references": ["Esad.Audio"],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true
+}

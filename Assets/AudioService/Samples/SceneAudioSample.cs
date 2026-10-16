@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace Controller.Audio.Samples
+namespace Esad.Audio.Samples
 {
     /// <summary>
     /// Optional whole-scene lifecycle example: prepare one looping SFX, retain its

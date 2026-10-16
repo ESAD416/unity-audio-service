@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using UnityEngine;
-using Emitter = Controller.Audio.AudioPlaybackEngine.Emitter;
+using Emitter = Esad.Audio.AudioPlaybackEngine.Emitter;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     // Native AudioSources behind playback: creation, idle reuse, the active update
     // list and trimming. An emitter is in use while it has a current or pending playback.

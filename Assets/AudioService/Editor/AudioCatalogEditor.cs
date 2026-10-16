@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
-namespace Controller.Audio.Editor
+namespace Esad.Audio.Editor
 {
     [CustomEditor(typeof(AudioCatalog))]
     public sealed class AudioCatalogEditor : UnityEditor.Editor

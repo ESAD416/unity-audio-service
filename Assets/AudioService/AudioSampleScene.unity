@@ -284,7 +284,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: df8993f33a2dab741867c887f1b7d908, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Controller.AudioControllerDebugMenu
+  m_EditorClassIdentifier: Esad.Audio.Samples::Esad.Audio.Samples.AudioControllerDebugMenu
   bgmKey: ukulele_song
   bgmTransitionKey: maou_bgm_acoustic50
   sfxKey: minigame_win
@@ -406,7 +406,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: dafeee815a501f746bb692e4e595165d, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Controller.Audio.AudioSettingsPlayerPrefs
+  m_EditorClassIdentifier: Esad.Audio::Esad.Audio.AudioSettingsPlayerPrefs
 --- !u!1001 &2792753824752564774
 PrefabInstance:
   m_ObjectHideFlags: 0

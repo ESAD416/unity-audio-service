@@ -1,6 +1,6 @@
 using System;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     /// <summary>
     /// Defines a push-based contract for supplying and persisting normalized audio volumes.

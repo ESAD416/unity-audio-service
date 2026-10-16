@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     [Serializable]
     public struct AudioId : IEquatable<AudioId>

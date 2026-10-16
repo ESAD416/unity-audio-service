@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace Controller.Audio.Samples
+namespace Esad.Audio.Samples
 {
     /// <summary>Playable sample and optional UnityEvent adapter. Assign clips in the Inspector.</summary>
     public sealed class AudioQuickStart : MonoBehaviour

@@ -1,6 +1,6 @@
 using System;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     /// <summary>Categories whose sources need a gain refresh.</summary>
     [Flags]

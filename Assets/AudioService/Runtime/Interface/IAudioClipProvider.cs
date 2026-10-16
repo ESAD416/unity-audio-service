@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     /// <summary>Main-thread access. Cache queries never load; every successful acquisition
     /// owns a lease. Completion runs exactly once, including failure (null).</summary>

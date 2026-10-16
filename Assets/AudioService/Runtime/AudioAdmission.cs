@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using UnityEngine;
-using Playback = Controller.Audio.AudioPlaybackEngine.Playback;
+using Playback = Esad.Audio.AudioPlaybackEngine.Playback;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     // Global and per-audio concurrency limits for new requests. Loading and paused
     // requests count; a replacement slot's own current and pending requests do not.

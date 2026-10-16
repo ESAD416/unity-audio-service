@@ -43,7 +43,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: dafeee815a501f746bb692e4e595165d, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Controller.Audio.AudioSettingsPlayerPrefs
+  m_EditorClassIdentifier: Esad.Audio::Esad.Audio.AudioSettingsPlayerPrefs
   masterKey: Audio.Master
   bgmKey: Audio.Bgm
   sfxKey: Audio.Sfx
@@ -130,7 +130,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: eda8b5320b1136e4c98e80208a0418e5, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Controller.Audio::Controller.Audio.AudioController
+  m_EditorClassIdentifier: Esad.Audio::Esad.Audio.AudioController
   clipProviderSource: {fileID: 253465715346525094}
   settingsSource: {fileID: 8756048511660154438}
   mixer: {fileID: 24100000, guid: 3f35b6efe137c23448b1ee21bfdc970e, type: 2}
@@ -177,7 +177,7 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 2f489a3f08bef544899a5d6b73d05b5b, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Controller.Audio::Controller.Audio.ResourcesAudioClipProvider
+  m_EditorClassIdentifier: Esad.Audio::Esad.Audio.ResourcesAudioClipProvider
   rootPath: Audio
   bgmPath: BGM
   sfxPath: SFX

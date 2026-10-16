@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
-namespace Controller.Audio.Editor
+namespace Esad.Audio.Editor
 {
     /// <summary>Explicit, optional import review and default profiles. Never runs on automatic import.</summary>
     public static class AudioImportTools

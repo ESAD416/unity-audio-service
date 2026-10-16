@@ -1,7 +1,7 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace Controller.Audio.Editor
+namespace Esad.Audio.Editor
 {
     [CustomEditor(typeof(AudioSettingsPlayerPrefs)), CanEditMultipleObjects]
     public sealed class AudioSettingsPlayerPrefsEditor : UnityEditor.Editor

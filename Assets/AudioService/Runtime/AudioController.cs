@@ -4,7 +4,7 @@ using UnityEngine.Audio;
 using UnityEngine.SceneManagement;
 using UnityEngine.Serialization;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     public class AudioController : MonoBehaviour
     {

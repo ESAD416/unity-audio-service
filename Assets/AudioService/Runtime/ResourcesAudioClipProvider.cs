@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     public class ResourcesAudioClipProvider : MonoBehaviour, IAudioClipProvider, IAudioClipProviderRefresh, IAudioClipProviderDiagnostics
     {

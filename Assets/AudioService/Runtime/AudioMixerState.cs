@@ -2,7 +2,7 @@ using System;
 using UnityEngine;
 using UnityEngine.Audio;
 
-namespace Controller.Audio
+namespace Esad.Audio
 {
     internal sealed class AudioMixerState
     {

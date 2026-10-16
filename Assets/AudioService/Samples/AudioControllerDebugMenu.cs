@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace Controller.Audio.Samples
+namespace Esad.Audio.Samples
 {
     /// <summary>
     /// 提供 ContextMenu 便於在編輯器測試 AudioController 的播放功能。
